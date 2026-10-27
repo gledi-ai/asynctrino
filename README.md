@@ -397,7 +397,6 @@ honouring `Retry-After` and otherwise backing off exponentially with jitter.
 - Autocommit sends no `X-Trino-Transaction-Id` header (Upstream sends `NONE`), so Trino refuses
   a manual `START TRANSACTION` statement instead of opening a transaction asynctrino can't
   track. Use `isolation_level` instead.
-- `commit()` and `rollback()` without an open transaction do nothing (Upstream raises).
 
 ### Statements and parameters
 
@@ -463,9 +462,13 @@ targets. `make dev` sets up the environment, and `make check` runs lint, format,
 and the tests with the 90% branch-coverage gate. Integration tests start Trino in Docker with
 testcontainers, or reuse one named by `TRINO_RUNNING_HOST` and `TRINO_RUNNING_PORT`. Commits
 follow [Conventional Commits](https://www.conventionalcommits.org/). Releases and the Upstream
-Catch-up process are described in [MAINTAINING.md](MAINTAINING.md).
+Catch-up process are described in [MAINTAINING.md][maintaining].
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE) for attribution to trino-python-client,
+Apache-2.0. See [LICENSE][license] and [NOTICE][notice] for attribution to trino-python-client,
 the original aiotrino authors, and the aiotrino sibling.
+
+[maintaining]: https://github.com/gledi-ai/asynctrino/blob/main/MAINTAINING.md
+[license]: https://github.com/gledi-ai/asynctrino/blob/main/LICENSE
+[notice]: https://github.com/gledi-ai/asynctrino/blob/main/NOTICE
