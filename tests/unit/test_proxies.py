@@ -2,8 +2,7 @@ import httpx2
 import pytest
 
 from asynctrino.dbapi import connect
-from tests.unit.server import OneRowServer
-from tests.unit.test_dbapi import unused_port
+from tests.unit.server import OneRowServer, unused_port
 
 pytestmark = pytest.mark.usefixtures("without_env_proxies")
 

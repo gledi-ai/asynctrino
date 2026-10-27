@@ -51,4 +51,3 @@ All notable changes to asynctrino, generated from its Conventional Commits.
 - Version untagged commits as the next patch's development release
 - Add changelog, release notes and package install-check targets
 - Publish tagged releases to TestPyPI, PyPI and GitHub Releases
-

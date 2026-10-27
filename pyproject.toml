@@ -6,7 +6,9 @@ readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.14,<3.16"
-authors = [{ name = "Gledi Caushaj", email = "201947707+gledi-ai@users.noreply.github.com" }]
+authors = [
+  { name = "Gledi Caushaj", email = "201947707+gledi-ai@users.noreply.github.com" },
+]
 keywords = ["trino", "asyncio", "database", "sql", "dbapi", "httpx2"]
 classifiers = [
   "Development Status :: 3 - Alpha",
@@ -23,11 +25,10 @@ classifiers = [
   "Typing :: Typed",
 ]
 dependencies = [
-  "httpx2>=2.15",
-  "lz4>=4.4",
-  "python-dateutil>=2.9",
-  "truststore>=0.10",
-  "tzlocal>=5.3",
+  "httpx2>=2.12,<3",
+  "lz4>=4.0,<5",
+  "python-dateutil>=2.8.2,<3",
+  "tzlocal>=5.0,<6",
 ]
 
 [project.optional-dependencies]
@@ -42,20 +43,18 @@ Repository = "https://github.com/gledi-ai/asynctrino"
 Issues = "https://github.com/gledi-ai/asynctrino/issues"
 
 [dependency-groups]
-dev = [
-  "coverage[toml]>=7.10",
-  "nox>=2025.5.1",
-  "nox-uv>=0.6",
-  "pyrefly>=0.40",
-  "pytest>=8.4",
-  "pytest-asyncio>=1.2",
-  "pytest-cov>=7",
-  "pytest-xdist>=3.8",
-  "ruff>=0.14",
-  "testcontainers>=4.13",
-  "trustme>=1.2",
-  "types-python-dateutil>=2.9",
+lint = ["pyrefly~=1.4", "ruff~=0.17", "types-python-dateutil~=2.9"]
+test = [
+  "coverage[toml]~=7.16",
+  "pytest~=9.1",
+  "pytest-asyncio~=1.4",
+  "pytest-cov~=7.1",
+  "pytest-sugar~=1.1",
+  "pytest-xdist~=3.8",
+  "testcontainers~=4.15",
+  "trustme~=1.2",
 ]
+dev = [{ include-group = "lint" }, { include-group = "test" }]
 
 [build-system]
 requires = ["hatchling", "uv-dynamic-versioning"]
@@ -78,12 +77,12 @@ packages = ["src/asynctrino"]
 include = ["/src", "/tests", "/README.md", "/LICENSE", "/NOTICE"]
 
 [tool.uv]
-exclude-newer = "7 days"
+exclude-newer = "1 week"
+exclude-newer-package = { ruff = "1 day", certifi = "1 day" }
 
 [tool.ruff]
 line-length = 100
-target-version = "py314"
-src = ["src", "."]
+src = ["src"]
 
 [tool.ruff.lint]
 select = ["ALL"]
@@ -109,19 +108,19 @@ ignore = [
   "DTZ001",  # naive datetimes are expected values for TIMESTAMP without time zone
 ]
 "src/asynctrino/sqlalchemy/_compiler.py" = [
-  "N801",  # window functions are named after the SQL functions they render, like SQLAlchemy's
-  "N802",  # SQLAlchemy dispatches types to visit_<UPPERCASE name>
+  "N801", # window functions are named after the SQL functions they render, like SQLAlchemy's
+  "N802", # SQLAlchemy dispatches types to visit_<UPPERCASE name>
 ]
-"noxfile.py" = ["D"]  # sessions are described by their names
-"typings/**" = ["A002"]  # stubs mirror upstream parameter names
+"noxfile.py" = ["D"] # sessions are described by their names
+"typings/**" = ["A002"] # stubs mirror upstream parameter names
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
 [tool.pyrefly]
-project-includes = ["src", "tests", "noxfile.py"]
+project-includes = ["src", "tests"]
 python-version = "3.14"
-search-path = ["src", "."]
+search-path = ["."]
 preset = "all"
 strict-callable-subtyping = true
 strict-partial-subtyping = true

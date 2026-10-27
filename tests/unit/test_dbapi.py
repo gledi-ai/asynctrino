@@ -1,4 +1,3 @@
-import socket
 from datetime import date
 from decimal import Decimal
 from typing import Literal
@@ -17,6 +16,7 @@ from asynctrino.exceptions import (
     TrinoQueryError,
 )
 from tests.unit.coordinator import JSON, FakeCoordinator, column, statement_pages
+from tests.unit.server import unused_port
 
 
 async def test_select_1_returns_its_single_row() -> None:
@@ -175,12 +175,6 @@ async def test_closing_a_connection_that_never_sent_a_request_is_harmless() -> N
     conn = connect(host="coordinator")
     await conn.close()
     await conn.close()
-
-
-def unused_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
 
 
 async def test_a_failed_query_raises_trino_query_error() -> None:

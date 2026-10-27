@@ -16,9 +16,10 @@ Pushing a tag runs `.github/workflows/release.yml`:
 | `vX.Y.Z-rc.N`  | yes                     | yes      | no              | no             |
 | `vX.Y.Z`       | yes                     | yes      | yes             | yes            |
 
-The build checks that the packages' version matches the tag, then installs the wheel and the
-sdist with the `sqlalchemy` extra on Python 3.14 and 3.15 and imports them. Publishing uses PyPI
-trusted publishing, so the repository holds no tokens.
+The build checks that the packages' version matches the tag and that their metadata passes
+`twine check --strict`, then installs the wheel and the sdist with the `sqlalchemy` extra on
+Python 3.14 and 3.15 and imports them. Publishing uses PyPI trusted publishing, so the repository
+holds no tokens.
 
 1. Make sure `main` is green in CI and holds everything to ship.
 2. Optionally, try a release candidate:

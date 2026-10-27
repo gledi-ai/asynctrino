@@ -25,6 +25,7 @@ body = """
 trim = false
 postprocessors = [
   { pattern = '\n{3,}', replace = "\n\n" },
+  { pattern = '\n+\z', replace = "\n" },
   { pattern = '\(#([0-9]+)\)', replace = "([#${1}](https://github.com/gledi-ai/asynctrino/pull/${1}))" },
 ]
 

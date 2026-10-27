@@ -1,0 +1,63 @@
+#:schema https://www.schemastore.org/prek.json
+
+default_language_version = { python = "python3.14" }
+
+[[repos]]
+repo = "https://github.com/pre-commit/pre-commit-hooks"
+rev = "v6.0.0"
+
+[[repos.hooks]]
+id = "trailing-whitespace"
+
+[[repos.hooks]]
+id = "end-of-file-fixer"
+
+[[repos.hooks]]
+id = "check-json"
+
+[[repos.hooks]]
+id = "check-yaml"
+
+[[repos.hooks]]
+id = "check-toml"
+
+[[repos.hooks]]
+id = "check-added-large-files"
+exclude = "uv.lock"
+
+[[repos.hooks]]
+id = "check-ast"
+
+[[repos.hooks]]
+id = "debug-statements"
+
+[[repos.hooks]]
+id = "check-merge-conflict"
+
+[[repos]]
+repo = "local"
+
+[[repos.hooks]]
+id = "ruff-check"
+name = "Ruff (lint)"
+entry = "uv run --locked --only-group lint ruff check --force-exclude"
+language = "system"
+types_or = ["python", "pyi"]
+require_serial = true
+
+[[repos.hooks]]
+id = "ruff-format"
+name = "Ruff (format check)"
+entry = "uv run --locked --only-group lint ruff format --check --force-exclude"
+language = "system"
+types_or = ["python", "pyi"]
+require_serial = true
+
+[[repos.hooks]]
+id = "pyrefly"
+name = "Pyrefly (typecheck)"
+entry = "uv run --locked --extra sqlalchemy pyrefly check"
+language = "system"
+types_or = ["python", "pyi"]
+pass_filenames = false
+require_serial = true

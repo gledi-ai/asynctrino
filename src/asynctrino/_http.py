@@ -10,7 +10,6 @@ from datetime import UTC, datetime
 from itertools import count
 
 import httpx2
-import truststore
 
 from asynctrino._core.messages import HttpRequest, HttpResponse, redact
 from asynctrino._core.query import Query
@@ -88,9 +87,7 @@ class Transport:
             msg = "connection is closed"
             raise ProgrammingError(msg)
         if self._client is None:
-            self._client = httpx2.AsyncClient(
-                verify=_ssl_context(verify=self._verify), timeout=self._timeout
-            )
+            self._client = httpx2.AsyncClient(verify=self._verify, timeout=self._timeout)
         try:
             if request.kind == "segment":
                 # send() skips the client's default headers and cookies, which build_request merges.
@@ -116,13 +113,6 @@ class Transport:
         if self._owns_client and self._client is not None:
             await self._client.aclose()
             self._client = None
-
-
-def _ssl_context(*, verify: bool | ssl.SSLContext) -> bool | ssl.SSLContext:
-    if verify is True:
-        # httpx2 uses OpenSSL's bundle rather than the OS trust store on Linux.
-        return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    return verify
 
 
 class QueryRunner:

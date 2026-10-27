@@ -1,3 +1,4 @@
+# pyright: reportMissingImports=false
 """Nox sessions for linting, formatting, type checking, the test matrix, and built packages."""
 
 import os
@@ -26,25 +27,25 @@ print("asynctrino", asynctrino.__version__)
 """
 
 
-@session(uv_groups=["dev"])
+@session(uv_only_groups=["lint"])
 def lint(s: nox.Session) -> None:
     """Check for lint issues."""
     _ = s.run("ruff", "check", *SOURCES)
 
 
-@session(uv_groups=["dev"])
+@session(uv_only_groups=["lint"])
 def format(s: nox.Session) -> None:  # noqa: A001
     """Check formatting."""
     _ = s.run("ruff", "format", "--check", *SOURCES)
 
 
-@session(uv_groups=["dev"])
+@session(uv_groups=["lint", "test"], uv_extras=["sqlalchemy"])
 def typecheck(s: nox.Session) -> None:
     """Type check the package and the tests at maximum strictness."""
     _ = s.run("pyrefly", "check")
 
 
-@session(python=PYTHONS, uv_groups=["dev"])
+@session(python=PYTHONS, uv_groups=["test"], uv_extras=["sqlalchemy"])
 def test(s: nox.Session) -> None:
     """Run the tests with branch coverage; pass pytest arguments after ``--``."""
     suffix = f"{s.python}-trino-{os.environ.get('TRINO_VERSION', 'latest')}"
@@ -59,6 +60,13 @@ def test(s: nox.Session) -> None:
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary is not None:
         _ = s.run("bash", "-c", f'coverage report --format=markdown >> "{summary}"', external=True)
+
+
+@nox.session(python=PYTHONS[0], venv_backend="uv")
+def test_lower(s: nox.Session) -> None:
+    """Run the tests against the lowest versions the runtime and sqlalchemy specifiers allow."""
+    s.install("--resolution", "lowest-direct", "-e", ".[sqlalchemy]", "--group", "test")
+    _ = s.run("pytest", *s.posargs)
 
 
 @nox.session(python=PYTHONS, venv_backend="uv")

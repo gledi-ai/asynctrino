@@ -80,6 +80,8 @@ jobs:
             fi
           done
 
+      - run: make dist/metadata
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist
@@ -112,7 +114,7 @@ jobs:
           name: dist
           path: dist/
 
-      - run: uv run --locked nox --session "dist-${{ matrix.python-version }}" --non-interactive
+      - run: make nox ARGS="--session dist-${{ matrix.python-version }} --non-interactive"
 
   publish-testpypi:
     name: publish to TestPyPI
