@@ -25,6 +25,7 @@ RESERVED_HEADERS = frozenset(
         "x-trino-extra-credential",
         "x-trino-original-user",
         "x-trino-path",
+        "x-trino-prepared-statement",
         "x-trino-query-data-encoding",
         "x-trino-role",
         "x-trino-schema",
@@ -94,6 +95,8 @@ class ClientSession:
     transaction_id: str | None = None
     """``None`` in autocommit; otherwise the open transaction's id, or ``"NONE"`` between them."""
     encoding: str | None = None
+    prepared_statements: Mapping[str, str] = field(default_factory=dict[str, str])
+    """The SQL of each statement a ``PREPARE`` registered, by name, until ``DEALLOCATE``."""
 
     def __post_init__(self) -> None:
         for name in self.http_headers:
@@ -127,12 +130,22 @@ class ClientSession:
             "X-Trino-Client-Capabilities": CLIENT_CAPABILITIES,
             "X-Trino-Query-Data-Encoding": self.encoding,
             "X-Trino-Transaction-Id": self.transaction_id,
+            "X-Trino-Prepared-Statement": _nonempty(
+                ",".join(
+                    f"{quote_plus(name)}={quote_plus(sql)}"
+                    for name, sql in self.prepared_statements.items()
+                )
+            ),
         }
         present = {name: value for name, value in values.items() if value is not None}
         return {**present, **self.http_headers}
 
     def updated(self, response_headers: Mapping[str, str]) -> ClientSession:
-        """The session after applying a response's ``X-Trino-Set-*`` and ``Clear-*`` headers."""
+        """The session after applying a response's ``X-Trino-*`` session updates.
+
+        Those are the ``Set-*``, ``Clear-*``, ``Reset-*``, ``Added-Prepare`` and
+        ``Deallocated-Prepare`` headers, and the transaction headers.
+        """
         updates = _ResponseHeaders(response_headers)
         cleared = set(updates.listed("x-trino-clear-session"))
         properties = {k: v for k, v in self.properties.items() if k not in cleared}
@@ -149,12 +162,19 @@ class ClientSession:
             properties=properties,
             roles={**self.roles, **updates.assignments("x-trino-set-role")},
             transaction_id=self._transaction_id_after(updates),
+            prepared_statements=self._prepared_statements_after(updates),
         )
 
     @property
     def in_transaction(self) -> bool:
         """Whether a transaction is open, so statements run inside it."""
         return self.transaction_id not in {None, NO_TRANSACTION}
+
+    def _prepared_statements_after(self, updates: _ResponseHeaders) -> dict[str, str]:
+        deallocated = {unquote_plus(name) for name in updates.listed("x-trino-deallocated-prepare")}
+        added = updates.assignments("x-trino-added-prepare")
+        statements = {**self.prepared_statements, **{unquote_plus(k): v for k, v in added.items()}}
+        return {name: sql for name, sql in statements.items() if name not in deallocated}
 
     def _transaction_id_after(self, updates: _ResponseHeaders) -> str | None:
         if self.transaction_id is None:

@@ -327,3 +327,36 @@ async def test_concurrent_statements_each_apply_their_own_session_update() -> No
     headers = requests[-1].headers
     assert headers["X-Trino-Catalog"] == "tpch"
     assert headers["X-Trino-Session"] == "query_priority=2"
+
+
+async def test_prepared_statements_the_coordinator_adds_are_sent_until_deallocated() -> None:
+    coordinator = SessionCoordinator(
+        [
+            [("X-Trino-Added-Prepare", "pick=SELECT+%3F%2C+%27a%3Db%27")],
+            [("X-Trino-Added-Prepare", "two=SELECT+2")],
+            [],
+            [("X-Trino-Deallocated-Prepare", "pick")],
+            [],
+            [("X-Trino-Deallocated-Prepare", "two")],
+        ]
+    )
+    async with coordinator.client() as client:
+        conn = connect(host="coordinator", http_client=client)
+        await conn.cursor().execute("PREPARE pick FROM SELECT ?, 'a=b'")
+        await conn.cursor().execute("PREPARE two FROM SELECT 2")
+
+        both = await statement_headers(conn, coordinator)
+        await conn.cursor().execute("DEALLOCATE PREPARE pick")
+        one = await statement_headers(conn, coordinator)
+        await conn.cursor().execute("DEALLOCATE PREPARE two")
+        none = await statement_headers(conn, coordinator)
+
+    assert "X-Trino-Prepared-Statement" not in coordinator.requests[0].headers
+    assert both["X-Trino-Prepared-Statement"] == "pick=SELECT+%3F%2C+%27a%3Db%27,two=SELECT+2"
+    assert one["X-Trino-Prepared-Statement"] == "two=SELECT+2"
+    assert "X-Trino-Prepared-Statement" not in none
+
+
+def test_the_prepared_statement_header_cannot_be_overridden() -> None:
+    with pytest.raises(ValueError, match="X-Trino-Prepared-Statement"):
+        _ = connect(host="coordinator", http_headers={"X-Trino-Prepared-Statement": "x=y"})

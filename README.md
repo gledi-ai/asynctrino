@@ -402,8 +402,10 @@ honouring `Retry-After` and otherwise backing off exponentially with jitter.
 ### Statements and parameters
 
 - No legacy prepared statements: parameters are always bound with `EXECUTE IMMEDIATE`, and the
-  `legacy_prepared_statements` option, the `X-Trino-Prepared-Statement` header and its size
-  limits are gone. Response headers are capped at 100 KB by httpcore2.
+  `legacy_prepared_statements` option is gone. `PREPARE`, `EXECUTE` and `DEALLOCATE PREPARE`
+  written in SQL still work: statements the Coordinator registers are sent back in
+  `X-Trino-Prepared-Statement` until deallocated. Response headers are capped at 100 KB by
+  httpcore2.
 - `executemany` reports the total `rowcount` across all parameter sets (Upstream: the last
   set's).
 - An aware `time`, or a `datetime` whose `tzinfo` isn't a `ZoneInfo`, is sent with its numeric

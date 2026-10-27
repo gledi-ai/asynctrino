@@ -5,8 +5,10 @@ from dataclasses import dataclass, field
 from typing import TypedDict, Unpack
 
 import httpx2
+import pytest
 
 from asynctrino.dbapi import Connection, Cursor, Row, connect
+from asynctrino.exceptions import TrinoUserError
 
 
 @dataclass
@@ -214,3 +216,13 @@ async def test_rowcount_of_insert(conn: Connection) -> None:
 
         assert cur.update_type == "INSERT"
         assert cur.rowcount == 3
+
+
+async def test_prepare_execute_and_deallocate_written_in_sql(conn: Connection) -> None:
+    assert await run(conn, "PREPARE pick FROM SELECT ? + 1, 'a,b=c'") == []
+
+    assert await run(conn, "EXECUTE pick USING 41") == [[42, "a,b=c"]]
+
+    _ = await run(conn, "DEALLOCATE PREPARE pick")
+    with pytest.raises(TrinoUserError, match="not found"):
+        _ = await run(conn, "EXECUTE pick USING 1")
