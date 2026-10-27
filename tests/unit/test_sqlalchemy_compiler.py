@@ -305,7 +305,7 @@ def test_varbinary_literal_binds_rejects_non_bytes(dialect: TrinoDialect) -> Non
         (literal(float("-inf")), "-infinity()"),
         (literal(Decimal("1.5")), "1.5"),
     ],
-    ids=repr,
+    ids=["double", "float", "real", "decimal-as-double", "int-as-double", "nan", "-inf", "decimal"],
 )
 def test_float_literals_render_as_double(
     dialect: TrinoDialect, expression: ColumnElement[object], expected: str
