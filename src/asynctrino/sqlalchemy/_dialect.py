@@ -505,13 +505,17 @@ def _catalog_and_schema(database: str | None) -> dict[str, str]:
             raise ValueError(msg)
 
 
-def _validate_trino_keyword_arguments_with(dialect: type[DefaultDialect]) -> None:
-    # SQLAlchemy validates `trino_*` arguments with the dialect registered as "trino", which is
-    # missing or Upstream's since this one is registered as "asynctrino"; use this one instead.
+def _register_trino_keyword_arguments(dialect: type[DefaultDialect]) -> None:
+    """Register ``dialect``'s ``trino_*`` keyword arguments under its name, ``trino``.
+
+    SQLAlchemy validates ``trino_*`` arguments with the dialect registered as ``trino``, which is
+    either missing or Upstream's, since this one is registered as ``asynctrino``.
+    """
     arguments = dialect.construct_arguments
+    # SQLAlchemy has no public API to register keyword arguments for another dialect name.
     DialectKWArgs._kw_registry[dialect.name] = (  # noqa: SLF001
         None if arguments is None else dict(arguments)
     )
 
 
-_validate_trino_keyword_arguments_with(TrinoDialect)
+_register_trino_keyword_arguments(TrinoDialect)
