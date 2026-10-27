@@ -122,11 +122,11 @@ class SpooledSegment:
 
     def download_request(self) -> HttpRequest:
         """The request that retrieves the Segment's data."""
-        return HttpRequest("GET", self.uri, self.headers, segment=True)
+        return HttpRequest("GET", self.uri, self.headers, kind="segment")
 
     def ack_request(self) -> HttpRequest:
         """The request that tells the Coordinator the Segment can be deleted."""
-        return HttpRequest("GET", self.ack_uri, self.headers, segment=True)
+        return HttpRequest("GET", self.ack_uri, self.headers, kind="segment")
 
     def decode(self, data: bytes) -> list[list[object]]:
         """The Segment's rows, from the data :meth:`download_request` retrieved."""

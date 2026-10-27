@@ -75,11 +75,12 @@ class Transport:
                 break
             await asyncio.sleep(delay)
         if isinstance(outcome, Exception):
-            target = "Segment storage" if request.segment else "the Coordinator"
+            to_segment = request.kind == "segment"
+            target = "Segment storage" if to_segment else "the Coordinator"
             url = redact(request.url)
             reason = str(outcome).replace(request.url, url)
             msg = f"failed to reach {target} at {url}: {type(outcome).__name__}: {reason}"
-            raise TrinoConnectionError(msg) from None if request.segment else outcome
+            raise TrinoConnectionError(msg) from None if to_segment else outcome
         return outcome
 
     async def _attempt(self, request: HttpRequest) -> HttpResponse | Exception:
@@ -91,7 +92,7 @@ class Transport:
                 verify=_ssl_context(verify=self._verify), timeout=self._timeout
             )
         try:
-            if request.segment:
+            if request.kind == "segment":
                 # send() skips the client's default headers and cookies, which build_request merges.
                 response = await self._client.send(
                     httpx2.Request(request.method, request.url, headers=request.headers),
@@ -278,7 +279,7 @@ async def _beat(query: Query, transport: Transport, interval: float) -> None:
         if response.status_code in {404, 405}:
             logger.warning("the Coordinator does not support heartbeats; stopping them")
             return
-        failures = 0 if 200 <= response.status_code < 300 else failures + 1  # noqa: PLR2004
+        failures = 0 if response.is_success else failures + 1
     logger.warning(
         "stopping the heartbeat for query %s after %d consecutive failures",
         query.query_id,
@@ -305,7 +306,7 @@ async def acknowledge_segment(segment: SpooledSegment, transport: Transport) -> 
     except Error as e:
         logger.warning("failed to acknowledge Segment %s: %s", redact(segment.ack_uri), e)
         return
-    if not 200 <= response.status_code < 300:  # noqa: PLR2004
+    if not response.is_success:
         logger.warning(
             "failed to acknowledge Segment %s: HTTP %d",
             redact(segment.ack_uri),

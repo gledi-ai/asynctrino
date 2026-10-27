@@ -70,7 +70,7 @@ class QueryStatus:
 
 def check_status(response: HttpResponse) -> None:
     """Raise if the Coordinator answered with an HTTP error status."""
-    if not 200 <= response.status_code < 300:  # noqa: PLR2004
+    if not response.is_success:
         raise _http_error(response)
 
 

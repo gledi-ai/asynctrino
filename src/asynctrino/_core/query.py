@@ -98,13 +98,13 @@ class Query:
             "Content-Type": "text/plain; charset=utf-8",
         }
         url = self._coordinator.statement_url
-        return HttpRequest("POST", url, headers, self.sql.encode(), statement=True)
+        return HttpRequest("POST", url, headers, self.sql.encode(), kind="statement")
 
     def advance(self) -> HttpRequest | None:
         """The GET for the next page, or ``None`` once the query has finished or was cancelled."""
         if self._next_uri is None or self.cancelled:
             return None
-        return HttpRequest("GET", self._next_uri, self._headers(), statement=True)
+        return HttpRequest("GET", self._next_uri, self._headers(), kind="statement")
 
     def heartbeat(self) -> HttpRequest | None:
         """The ``HEAD`` that keeps the query alive, or ``None`` once it has ended."""

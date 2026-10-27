@@ -31,7 +31,7 @@ def test_an_unparseable_retry_after_is_ignored(value: str) -> None:
 
 
 STATEMENT = HttpRequest(
-    "GET", "http://coordinator:8080/v1/statement/executing/q/y/1", {}, statement=True
+    "GET", "http://coordinator:8080/v1/statement/executing/q/y/1", {}, kind="statement"
 )
 OTHER = HttpRequest("GET", "http://storage/segment/1", {})
 POLICY = RetryPolicy(max_attempts=5)

@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
+from http import HTTPStatus
 
 import httpx2
 
@@ -71,7 +72,7 @@ def _is_transient(outcome: HttpResponse | Exception, request: HttpRequest) -> bo
     if outcome.status_code in RETRYABLE_STATUSES:
         return True
     empty = len(outcome.content.strip()) == 0
-    return request.statement and outcome.status_code == 200 and empty  # noqa: PLR2004
+    return request.kind == "statement" and outcome.status_code == HTTPStatus.OK and empty
 
 
 def parse_retry_after(value: str, now: datetime) -> float | None:
