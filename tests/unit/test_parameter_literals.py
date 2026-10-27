@@ -12,6 +12,8 @@ import pytest
 from asynctrino._core.parameters import execute_immediate, format_parameter
 from asynctrino.exceptions import NotSupportedError
 
+NOW = datetime(2026, 1, 15, tzinfo=UTC)
+
 
 @pytest.mark.parametrize(
     ("value", "literal"),
@@ -38,7 +40,7 @@ from asynctrino.exceptions import NotSupportedError
     ],
 )
 def test_scalars_format_as_trino_literals(value: object, literal: str) -> None:
-    assert format_parameter(value) == literal
+    assert format_parameter(value, now=NOW) == literal
 
 
 @pytest.mark.parametrize(
@@ -55,7 +57,7 @@ def test_scalars_format_as_trino_literals(value: object, literal: str) -> None:
     ],
 )
 def test_binary_and_uuid_format_as_trino_literals(value: object, literal: str) -> None:
-    assert format_parameter(value) == literal
+    assert format_parameter(value, now=NOW) == literal
 
 
 BRUSSELS = ZoneInfo("Europe/Brussels")
@@ -92,7 +94,7 @@ KOLKATA = ZoneInfo("Asia/Kolkata")
     ],
 )
 def test_dates_and_times_format_as_trino_literals(value: object, literal: str) -> None:
-    assert format_parameter(value) == literal
+    assert format_parameter(value, now=NOW) == literal
 
 
 class Hostile(tzinfo):
@@ -109,7 +111,7 @@ class Hostile(tzinfo):
 
 
 def test_a_custom_zone_is_rendered_as_its_offset_never_its_name() -> None:
-    literal = format_parameter(datetime(2020, 1, 2, 3, 4, 5, tzinfo=Hostile()))
+    literal = format_parameter(datetime(2020, 1, 2, 3, 4, 5, tzinfo=Hostile()), now=NOW)
 
     assert literal == "TIMESTAMP '2020-01-02 03:04:05.000000 +01:00'"
 
@@ -120,7 +122,7 @@ def test_a_zone_key_outside_the_safe_alphabet_is_not_supported() -> None:
     zone = ZoneInfo.from_file(io.BytesIO(utc), key="UTC' OR '1'='1")
 
     with pytest.raises(NotSupportedError, match="time zone"):
-        _ = format_parameter(datetime(2020, 1, 2, tzinfo=zone))
+        _ = format_parameter(datetime(2020, 1, 2, tzinfo=zone), now=NOW)
 
 
 @pytest.mark.parametrize(
@@ -137,7 +139,7 @@ def test_a_zone_key_outside_the_safe_alphabet_is_not_supported() -> None:
     ],
 )
 def test_lists_tuples_and_dicts_format_as_array_row_and_map(value: object, literal: str) -> None:
-    assert format_parameter(value) == literal
+    assert format_parameter(value, now=NOW) == literal
 
 
 class Opaque:
@@ -157,11 +159,11 @@ class Opaque:
 def test_unsupported_types_raise_not_supported_error(value: object, type_name: str) -> None:
     expected = f"Query parameter of type '.*{type_name}.*' is not supported"
     with pytest.raises(NotSupportedError, match=expected):
-        _ = format_parameter(value)
+        _ = format_parameter(value, now=NOW)
 
 
 def test_execute_immediate_quotes_the_statement_and_joins_the_parameters() -> None:
-    assert execute_immediate("SELECT ?, 'x' || ?", [None, "y'z"]) == (
+    assert execute_immediate("SELECT ?, 'x' || ?", [None, "y'z"], now=NOW) == (
         "EXECUTE IMMEDIATE 'SELECT ?, ''x'' || ?' USING NULL,'y''z'"
     )
 
@@ -189,5 +191,15 @@ class SneakyInt(int):
 
 
 def test_subclasses_cannot_change_how_their_values_are_escaped() -> None:
-    assert format_parameter(SneakyStr("it's")) == "'it''s'"
-    assert format_parameter(SneakyInt(7)) == "7"
+    assert format_parameter(SneakyStr("it's"), now=NOW) == "'it''s'"
+    assert format_parameter(SneakyInt(7), now=NOW) == "7"
+
+
+@pytest.mark.parametrize(
+    ("now", "offset"),
+    [(datetime(2026, 1, 15, tzinfo=UTC), "+01:00"), (datetime(2026, 7, 15, tzinfo=UTC), "+02:00")],
+)
+def test_a_time_in_a_named_zone_takes_the_offset_in_force_now(now: datetime, offset: str) -> None:
+    literal = format_parameter(time(3, 4, 5, tzinfo=BRUSSELS), now=now)
+
+    assert literal == f"TIME '03:04:05.000000 {offset}'"

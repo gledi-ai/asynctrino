@@ -14,39 +14,51 @@ from asynctrino.exceptions import NotSupportedError
 _ZONE_PATTERN = re.compile(r"[A-Za-z0-9_+\-/:]+")
 
 
-def execute_immediate(operation: str, parameters: Sequence[object]) -> str:
-    """The ``EXECUTE IMMEDIATE`` statement that runs ``operation`` with ``parameters`` bound."""
-    return f"EXECUTE IMMEDIATE {_quote(operation)} USING {_format_all(parameters)}"
+def execute_immediate(operation: str, parameters: Sequence[object], *, now: datetime) -> str:
+    """The ``EXECUTE IMMEDIATE`` statement that runs ``operation`` with ``parameters`` bound.
+
+    ``now`` is as :func:`format_parameter` describes.
+    """
+    return f"EXECUTE IMMEDIATE {_quote(operation, now)} USING {_format_all(parameters, now)}"
 
 
-@singledispatch
-def format_parameter(value: object) -> str:
+def format_parameter(value: object, *, now: datetime) -> str:
     """Format ``value`` as the Trino literal it binds to, following Upstream's rules.
+
+    Args:
+        value: The parameter value.
+        now: The current timezone-aware time. A ``time`` has no date, so one in a named zone
+            takes the offset in force at ``now``, like Upstream.
 
     Raises:
         NotSupportedError: ``value``, or a value nested in it, has no Trino literal.
     """
+    return _literal(value, now)
+
+
+@singledispatch
+def _literal(value: object, _now: datetime) -> str:
     msg = f"Query parameter of type '{type(value)}' is not supported."
     raise NotSupportedError(msg)
 
 
-@format_parameter.register(type(None))
-def _format_null(_: None) -> str:
+@_literal.register(type(None))
+def _format_null(_: None, _now: datetime) -> str:
     return "NULL"
 
 
-@format_parameter.register
-def _format_boolean(value: bool) -> str:  # noqa: FBT001  # singledispatch on the value
+@_literal.register
+def _format_boolean(value: bool, _now: datetime) -> str:  # noqa: FBT001  # singledispatch on the value
     return "true" if value else "false"
 
 
-@format_parameter.register
-def _format_integer(value: int) -> str:
+@_literal.register
+def _format_integer(value: int, _now: datetime) -> str:
     return int.__repr__(value)
 
 
-@format_parameter.register
-def _format_double(value: float) -> str:
+@_literal.register
+def _format_double(value: float, _now: datetime) -> str:
     if math.isnan(value):
         return "nan()"
     if math.isinf(value):
@@ -54,31 +66,31 @@ def _format_double(value: float) -> str:
     return f"DOUBLE '{float.__repr__(value)}'"
 
 
-@format_parameter.register
-def _format_decimal(value: Decimal) -> str:
+@_literal.register
+def _format_decimal(value: Decimal, _now: datetime) -> str:
     return f"DECIMAL '{Decimal.__format__(value, 'f')}'"
 
 
-@format_parameter.register
-def _quote(value: str) -> str:
+@_literal.register
+def _quote(value: str, _now: datetime) -> str:
     escaped = str.replace(value, "'", "''")
     return f"'{escaped}'"
 
 
-@format_parameter.register(bytes)
-@format_parameter.register(bytearray)
-@format_parameter.register(memoryview)
-def _format_varbinary(value: bytes | bytearray | memoryview) -> str:
+@_literal.register(bytes)
+@_literal.register(bytearray)
+@_literal.register(memoryview)
+def _format_varbinary(value: bytes | bytearray | memoryview, _now: datetime) -> str:
     return f"X'{bytes(value).hex()}'"
 
 
-@format_parameter.register
-def _format_date(value: date) -> str:
+@_literal.register
+def _format_date(value: date, _now: datetime) -> str:
     return f"DATE '{date.strftime(value, '%Y-%m-%d')}'"
 
 
-@format_parameter.register
-def _format_timestamp(value: datetime) -> str:
+@_literal.register
+def _format_timestamp(value: datetime, _now: datetime) -> str:
     text = datetime.strftime(value, "%Y-%m-%d %H:%M:%S.%f")
     zone = value.tzinfo
     offset = value.utcoffset()
@@ -88,46 +100,45 @@ def _format_timestamp(value: datetime) -> str:
     return f"TIMESTAMP '{text} {_checked_zone(name)}'"
 
 
-@format_parameter.register
-def _format_time(value: time) -> str:
+@_literal.register
+def _format_time(value: time, now: datetime) -> str:
     text = time.strftime(value, "%H:%M:%S.%f")
     zone = value.tzinfo
     if zone is None:
         return f"TIME '{text}'"
-    return f"TIME '{text} {_checked_zone(_format_offset(_current_offset(zone)))}'"
+    return f"TIME '{text} {_checked_zone(_format_offset(_current_offset(zone, now)))}'"
 
 
-@format_parameter.register
-def _format_uuid(value: uuid.UUID) -> str:
+@_literal.register
+def _format_uuid(value: uuid.UUID, _now: datetime) -> str:
     return f"UUID '{uuid.UUID(str(value))}'"
 
 
-@format_parameter.register(list)
-def _format_array(value: list[object]) -> str:
-    return f"ARRAY[{_format_all(value)}]"
+@_literal.register(list)
+def _format_array(value: list[object], now: datetime) -> str:
+    return f"ARRAY[{_format_all(value, now)}]"
 
 
-@format_parameter.register(tuple)
-def _format_row(value: tuple[object, ...]) -> str:
-    return f"ROW({_format_all(value)})"
+@_literal.register(tuple)
+def _format_row(value: tuple[object, ...], now: datetime) -> str:
+    return f"ROW({_format_all(value, now)})"
 
 
-@format_parameter.register(dict)
-def _format_map(value: dict[object, object]) -> str:
-    keys = _format_all(list(value.keys()))
-    values = _format_all(list(value.values()))
+@_literal.register(dict)
+def _format_map(value: dict[object, object], now: datetime) -> str:
+    keys = _format_all(list(value.keys()), now)
+    values = _format_all(list(value.values()), now)
     return f"MAP(ARRAY[{keys}], ARRAY[{values}])"
 
 
-def _format_all(values: Sequence[object]) -> str:
-    return ",".join(map(format_parameter, values))
+def _format_all(values: Sequence[object], now: datetime) -> str:
+    return ",".join(_literal(value, now) for value in values)
 
 
-def _current_offset(zone: tzinfo) -> timedelta:
+def _current_offset(zone: tzinfo, now: datetime) -> timedelta:
     offset = zone.utcoffset(None)
     if offset is None:
-        # A time has no date, so a named zone's offset is taken as of now, like Upstream.
-        offset = datetime.now(zone).utcoffset()
+        offset = now.astimezone(zone).utcoffset()
     return timedelta() if offset is None else offset
 
 

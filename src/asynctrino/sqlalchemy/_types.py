@@ -3,6 +3,7 @@
 import json
 import re
 from collections.abc import Callable, Iterator, Sequence
+from datetime import UTC, datetime
 from typing import Any, override
 
 from sqlalchemy import exc, func, util
@@ -120,7 +121,7 @@ class VARBINARY(sqltypes.VARBINARY):
 
 def _varbinary_literal(value: object) -> str:
     if isinstance(value, bytes | bytearray | memoryview):
-        return format_parameter(value)
+        return format_parameter(value, now=datetime.now(UTC))
     msg = f"VARBINARY literal must be bytes, bytearray or memoryview, got {type(value).__name__}"
     raise exc.CompileError(msg)
 
@@ -146,7 +147,7 @@ def _to_float(value: float | None) -> float | None:
 
 
 def _double_literal(value: float) -> str:
-    return format_parameter(float(value))
+    return format_parameter(float(value), now=datetime.now(UTC))
 
 
 class JSONIndexType(sqltypes.JSON.JSONIndexType):
@@ -196,7 +197,7 @@ def _path_element(value: object) -> str:
 
 def _literal(path: Callable[[object], str]) -> _LiteralProcessorType[object]:
     def process(value: object) -> str:
-        return format_parameter(path(value))
+        return format_parameter(path(value), now=datetime.now(UTC))
 
     return process
 

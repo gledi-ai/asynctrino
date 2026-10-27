@@ -1,6 +1,7 @@
 """Compilers that render SQLAlchemy statements, DDL and types as Trino SQL."""
 
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, override
 
@@ -290,7 +291,7 @@ class TrinoDDLCompiler(compiler.DDLCompiler):
             if name in {argument, "catalog"}:
                 continue
             try:
-                literal = format_parameter(value)
+                literal = format_parameter(value, now=datetime.now(UTC))
             except NotSupportedError as e:
                 msg = f"Table property {name!r} has no Trino literal: {value!r}"
                 raise exc.CompileError(msg) from e

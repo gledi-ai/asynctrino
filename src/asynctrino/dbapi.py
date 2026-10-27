@@ -11,6 +11,7 @@ Example:
 import ssl
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 from types import TracebackType
 from typing import ClassVar, Final, Literal, NamedTuple, Self, overload, override
 
@@ -590,7 +591,7 @@ class _BaseCursor[T](ABC):
             msg = f"params must be a list or tuple of parameter values, not {type(params)}"
             raise ProgrammingError(msg)
         if params is not None and len(params) > 0:
-            operation = execute_immediate(operation, params)
+            operation = execute_immediate(operation, params, now=datetime.now(UTC))
         query = Query(
             operation,
             self._executor.coordinator,
