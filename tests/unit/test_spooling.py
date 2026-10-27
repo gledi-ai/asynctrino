@@ -1,3 +1,4 @@
+import asyncio
 import base64
 from collections.abc import Callable
 from typing import cast
@@ -554,3 +555,29 @@ async def test_a_segment_of_a_closed_connection_is_never_downloaded() -> None:
             _ = await segment.data()
 
     assert storage.segment_requests() == []
+
+
+@pytest.mark.parametrize("read", ["data", "rows"])
+async def test_a_timeout_during_a_segment_download_deletes_the_query(read: str) -> None:
+    storage = spooled_query(
+        lambda s: [[s.spooled("a", [[1, "one"]])], [s.spooled("b", [[2, "two"]], offset=1)]]
+    )
+    stalled = SegmentStorage.uri("a")
+
+    async def handler(request: httpx2.Request) -> httpx2.Response:
+        if str(request.url) == stalled:
+            _ = await asyncio.Event().wait()
+        return storage.handler(request)
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as client:
+        conn = connect(host="coordinator", encoding="json", http_client=client)
+        cur = conn.cursor(cursor_style="segment")
+        await cur.execute("SELECT n, s FROM t")
+        [segment] = await cur.fetchmany(1)
+
+        with pytest.raises(TimeoutError):
+            async with asyncio.timeout(0.05):
+                _ = await (segment.data() if read == "data" else segment.rows())
+
+    deletes = [str(r.url) for r in storage.requests if r.method == "DELETE"]
+    assert deletes == [storage.coordinator.pages[1]["nextUri"]]

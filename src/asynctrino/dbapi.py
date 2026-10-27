@@ -50,7 +50,6 @@ from asynctrino._http import (
     QueryRunner,
     Transport,
     acknowledge_segment,
-    segment_data,
 )
 from asynctrino.exceptions import (
     DatabaseError,
@@ -644,8 +643,8 @@ class SegmentCursor(_BaseCursor["Segment"]):
 
     @override
     def _take(self, query: Query, limit: int | None) -> list[Segment]:
-        transport = self._executor.runner.transport
-        return [Segment(segment, query, transport) for segment in query.take_segments(limit)]
+        runner = self._executor.runner
+        return [Segment(segment, query, runner) for segment in query.take_segments(limit)]
 
 
 class Segment:
@@ -656,11 +655,11 @@ class Segment:
     """
 
     def __init__(
-        self, segment: InlineSegment | SpooledSegment, query: Query, transport: Transport
+        self, segment: InlineSegment | SpooledSegment, query: Query, runner: QueryRunner
     ) -> None:
         self._segment = segment
         self._query = query
-        self._transport = transport
+        self._runner = runner
 
     @property
     def encoding(self) -> Encoding:
@@ -690,13 +689,16 @@ class Segment:
     async def data(self) -> bytes:
         """The Segment's data, still encoded, downloading it if it is spooled.
 
+        If the awaiting task is cancelled during the download, the query is cancelled on the
+        Coordinator best-effort, as it is during :meth:`Cursor.execute` or a fetch.
+
         Raises:
             HttpError: Segment storage answered with an error status.
             TrinoConnectionError: Segment storage could not be reached.
         """
         if isinstance(self._segment, InlineSegment):
             return self._segment.data
-        return await segment_data(self._segment, self._transport)
+        return await self._runner.download(self._query, self._segment)
 
     async def rows(self) -> list[Row]:
         """The Segment's rows, decoded and mapped like a :class:`Cursor`'s.
@@ -712,7 +714,7 @@ class Segment:
     async def acknowledge(self) -> None:
         """Tell the server a spooled Segment can be deleted; a failure is only logged."""
         if isinstance(self._segment, SpooledSegment):
-            await acknowledge_segment(self._segment, self._transport)
+            await acknowledge_segment(self._segment, self._runner.transport)
 
     @override
     def __repr__(self) -> str:

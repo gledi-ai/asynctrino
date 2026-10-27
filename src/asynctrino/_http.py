@@ -148,6 +148,16 @@ class QueryRunner:
         async with self._tracking(query):
             return await self._fetch(query)
 
+    async def download(self, query: Query, segment: SpooledSegment) -> bytes:
+        """Download ``segment``'s data, still encoded, abandoning ``query`` if cancelled meanwhile.
+
+        Raises:
+            HttpError: Segment storage answered with an error status.
+            TrinoConnectionError: Segment storage could not be reached.
+        """
+        async with self._tracking(query):
+            return await segment_data(segment, self.transport)
+
     async def cancel(self, query: Query) -> None:
         """Cancel ``query`` on the Coordinator, if it is still running.
 
