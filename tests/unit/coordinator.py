@@ -1,7 +1,9 @@
 """A scripted fake Coordinator served through ``httpx2.MockTransport``."""
 
+import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from itertools import count
 
 import httpx2
 
@@ -82,3 +84,61 @@ class FakeCoordinator:
     def client(self) -> httpx2.AsyncClient:
         """Return an ``AsyncClient`` routed to this fake Coordinator."""
         return httpx2.AsyncClient(transport=httpx2.MockTransport(self.handler))
+
+
+@dataclass
+class TransactionCoordinator:
+    """Starts, commits and rolls back transactions as Trino does, through response headers.
+
+    Other statements finish in one page, unless they are listed in ``open_statements``: those
+    return a page of rows with a ``nextUri``, then finish on the GET. Statements listed in
+    ``failing_statements`` fail with a user error, on the GET if they are also open.
+    """
+
+    open_statements: set[str] = field(default_factory=set[str])
+    failing_statements: set[str] = field(default_factory=set[str])
+    requests: list[httpx2.Request] = field(default_factory=list[httpx2.Request])
+    _transaction_ids: count[int] = field(default_factory=lambda: count(1))
+    _failing_uris: set[str] = field(default_factory=set[str])
+
+    async def handler(self, request: httpx2.Request) -> httpx2.Response:
+        await asyncio.sleep(0)
+        self.requests.append(request)
+        query_id = f"q{len(self.requests)}"
+        page: JSON = {
+            "id": query_id,
+            "infoUri": f"{BASE_URL}/ui/query.html?{query_id}",
+            "stats": {"state": "FINISHED"},
+        }
+        headers: dict[str, str] = {}
+        failure = {"message": "statement failed", "errorType": "USER_ERROR"}
+        if request.method == "GET":
+            if str(request.url) in self._failing_uris:
+                page["error"] = failure
+            return httpx2.Response(200, json=page)
+        sql = request.content.decode()
+        if sql in self.open_statements:
+            next_uri = f"{BASE_URL}/v1/statement/executing/{query_id}/y/1"
+            page |= {"stats": {"state": "RUNNING"}, "columns": [column("_col0", "integer")]}
+            page["data"] = [[1]]
+            page["nextUri"] = next_uri
+            if sql in self.failing_statements:
+                self._failing_uris.add(next_uri)
+        elif sql in self.failing_statements:
+            page["error"] = failure
+        elif sql.startswith("START TRANSACTION"):
+            headers["X-Trino-Started-Transaction-Id"] = f"tx-{next(self._transaction_ids)}"
+        elif sql in {"COMMIT", "ROLLBACK"}:
+            headers["X-Trino-Clear-Transaction-Id"] = "true"
+        return httpx2.Response(200, json=page, headers=headers)
+
+    def client(self) -> httpx2.AsyncClient:
+        return httpx2.AsyncClient(transport=httpx2.MockTransport(self.handler))
+
+    def statements(self) -> list[tuple[str, str | None]]:
+        """Each POSTed statement with the transaction id it was sent in."""
+        return [
+            (r.content.decode(), r.headers.get("X-Trino-Transaction-Id"))
+            for r in self.requests
+            if r.method == "POST"
+        ]

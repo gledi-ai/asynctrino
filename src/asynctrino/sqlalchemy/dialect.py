@@ -1,16 +1,24 @@
 """The ``asynctrino://`` SQLAlchemy dialect for Trino."""
 
 import json
+from collections.abc import Sequence
 from typing import cast, override
 
 from sqlalchemy.engine.default import DefaultDialect, DefaultExecutionContext
-from sqlalchemy.engine.interfaces import ConnectArgsType, DBAPICursor, DBAPIModule
+from sqlalchemy.engine.interfaces import (
+    ConnectArgsType,
+    DBAPIConnection,
+    DBAPICursor,
+    DBAPIModule,
+)
+from sqlalchemy.engine.interfaces import IsolationLevel as SQLAlchemyIsolationLevel
 from sqlalchemy.engine.url import URL
 from sqlalchemy.util import VersionInfo, parse_version_string
 
 import asynctrino
 from asynctrino.auth import BasicAuthentication, JWTAuthentication
-from asynctrino.sqlalchemy._adapter import AsyncAdaptDBAPI
+from asynctrino.dbapi import IsolationLevel
+from asynctrino.sqlalchemy._adapter import AsyncAdaptConnection, AsyncAdaptDBAPI
 from asynctrino.sqlalchemy._url import DEFAULT_SOURCE
 
 _PLAIN_QUERY_OPTIONS = ("source", "timezone")
@@ -51,6 +59,23 @@ class TrinoDialect(DefaultDialect):
     @override
     def retrieve_dbapi_version(self, dbapi: DBAPIModule) -> VersionInfo:
         return parse_version_string(asynctrino.__version__)
+
+    @override
+    def get_isolation_level_values(
+        self, dbapi_conn: DBAPIConnection
+    ) -> Sequence[SQLAlchemyIsolationLevel]:
+        return [cast("SQLAlchemyIsolationLevel", level.value) for level in IsolationLevel]
+
+    @override
+    def get_isolation_level(self, dbapi_connection: DBAPIConnection) -> SQLAlchemyIsolationLevel:
+        level = _adapted(dbapi_connection).isolation_level
+        return cast("SQLAlchemyIsolationLevel", level.value)
+
+    @override
+    def set_isolation_level(
+        self, dbapi_connection: DBAPIConnection, level: SQLAlchemyIsolationLevel
+    ) -> None:
+        _adapted(dbapi_connection).set_isolation_level(IsolationLevel(level))
 
     @override
     def create_connect_args(self, url: URL) -> ConnectArgsType:
@@ -98,6 +123,10 @@ class TrinoDialect(DefaultDialect):
         if "auth" in kwargs and kwargs.get("allow_insecure_auth") is not True:
             kwargs["http_scheme"] = "https"
         return [], kwargs
+
+
+def _adapted(dbapi_connection: DBAPIConnection) -> AsyncAdaptConnection:
+    return cast("AsyncAdaptConnection", dbapi_connection)
 
 
 def _catalog_and_schema(database: str | None) -> dict[str, str]:

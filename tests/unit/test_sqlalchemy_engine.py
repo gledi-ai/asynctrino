@@ -2,14 +2,21 @@ from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from importlib.metadata import version
 from types import MappingProxyType
+from typing import Protocol
 
 import httpx2
-from sqlalchemy import text
+import pytest
+from sqlalchemy import exc, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from asynctrino.auth import BasicAuthentication
 from asynctrino.sqlalchemy import URL
-from tests.unit.coordinator import FakeCoordinator, column, statement_pages
+from tests.unit.coordinator import (
+    FakeCoordinator,
+    TransactionCoordinator,
+    column,
+    statement_pages,
+)
 
 
 @asynccontextmanager
@@ -28,8 +35,12 @@ async def engine_for(
         await engine.dispose()
 
 
+class Scripted(Protocol):
+    def client(self) -> httpx2.AsyncClient: ...
+
+
 @asynccontextmanager
-async def connection_to(coordinator: FakeCoordinator) -> AsyncGenerator[AsyncConnection]:
+async def connection_to(coordinator: Scripted) -> AsyncGenerator[AsyncConnection]:
     async with (
         coordinator.client() as client,
         engine_for(client) as engine,
@@ -139,3 +150,76 @@ async def test_stream_fetches_pages_as_rows_are_consumed() -> None:
     assert tuple(first) == (1,)
     assert gets_after_first_row == []
     assert rest == [(2,), (3,), (4,)]
+
+
+async def test_isolation_level_set_on_a_connection_is_reset_when_it_returns_to_the_pool() -> None:
+    coordinator = TransactionCoordinator()
+    async with coordinator.client() as client, engine_for(client) as engine:
+        async with engine.connect() as conn:
+            assert await conn.get_isolation_level() == "AUTOCOMMIT"
+            _ = await conn.execution_options(isolation_level="READ COMMITTED")
+            assert await conn.get_isolation_level() == "READ COMMITTED"
+            _ = await conn.execute(text("SELECT 1"))
+            await conn.commit()
+        async with engine.connect() as conn:
+            assert await conn.get_isolation_level() == "AUTOCOMMIT"
+            _ = await conn.execute(text("SELECT 2"))
+
+    assert coordinator.statements() == [
+        ("START TRANSACTION ISOLATION LEVEL READ COMMITTED", "NONE"),
+        ("SELECT 1", "tx-1"),
+        ("COMMIT", "tx-1"),
+        ("SELECT 2", None),
+    ]
+
+
+async def fail_in_transaction(engine: AsyncEngine, sql: str) -> None:
+    async with engine.begin() as conn:
+        _ = await conn.execute(text(sql))
+        raise RuntimeError
+
+
+async def test_engine_isolation_level_runs_begin_blocks_in_transactions() -> None:
+    coordinator = TransactionCoordinator()
+    async with (
+        coordinator.client() as client,
+        engine_for(client, isolation_level="SERIALIZABLE") as engine,
+    ):
+        async with engine.begin() as conn:
+            _ = await conn.execute(text("SELECT 1"))
+        with pytest.raises(RuntimeError):
+            await fail_in_transaction(engine, "SELECT 2")
+
+    assert coordinator.statements() == [
+        ("START TRANSACTION ISOLATION LEVEL SERIALIZABLE", "NONE"),
+        ("SELECT 1", "tx-1"),
+        ("COMMIT", "tx-1"),
+        ("START TRANSACTION ISOLATION LEVEL SERIALIZABLE", "NONE"),
+        ("SELECT 2", "tx-2"),
+        ("ROLLBACK", "tx-2"),
+    ]
+
+
+async def test_unknown_isolation_level_is_rejected() -> None:
+    async with connection_to(TransactionCoordinator()) as conn:
+        with pytest.raises(exc.ArgumentError, match="SNAPSHOT"):
+            _ = await conn.execution_options(isolation_level="SNAPSHOT")
+
+
+async def test_setting_the_isolation_level_ends_an_open_transaction() -> None:
+    coordinator = TransactionCoordinator()
+    async with connection_to(coordinator) as conn:
+        _ = await conn.execution_options(isolation_level="READ COMMITTED")
+        _ = await conn.execute(text("SELECT 1"))
+        dialect = conn.dialect
+        raw = (await conn.get_raw_connection()).dbapi_connection
+        assert raw is not None
+        await conn.run_sync(lambda _: dialect.set_isolation_level(raw, "AUTOCOMMIT"))
+        _ = await conn.execute(text("SELECT 2"))
+
+    assert coordinator.statements() == [
+        ("START TRANSACTION ISOLATION LEVEL READ COMMITTED", "NONE"),
+        ("SELECT 1", "tx-1"),
+        ("ROLLBACK", "tx-1"),
+        ("SELECT 2", None),
+    ]

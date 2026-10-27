@@ -15,7 +15,7 @@ from sqlalchemy.connectors.asyncio import (
 from sqlalchemy.util.concurrency import await_
 
 from asynctrino import dbapi
-from asynctrino.dbapi import Connection
+from asynctrino.dbapi import Connection, IsolationLevel
 
 _EXCEPTIONS = (
     "Warning",
@@ -50,6 +50,20 @@ class AsyncAdaptConnection(AsyncAdapt_terminate, AsyncAdapt_dbapi_connection):
 
     _cursor_cls = AsyncAdaptCursor
     _ss_cursor_cls = AsyncAdaptServerSideCursor
+
+    @property
+    def _trino(self) -> Connection:
+        return cast("Connection", self._connection)
+
+    @property
+    def isolation_level(self) -> IsolationLevel:
+        """The isolation level of the adapted connection."""
+        return self._trino.isolation_level
+
+    def set_isolation_level(self, level: IsolationLevel) -> None:
+        """Roll back any open transaction, then run the next statements at ``level``."""
+        self.rollback()
+        self._trino.isolation_level = level
 
 
 class AsyncAdaptDBAPI(AsyncAdapt_dbapi_module):
