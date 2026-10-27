@@ -66,10 +66,15 @@ class QueryStatus:
     update_count: int | None
 
 
-def parse_status(response: HttpResponse) -> QueryStatus:
-    """Parse a Coordinator response, raising if it reports a failure."""
+def check_status(response: HttpResponse) -> None:
+    """Raise if the Coordinator answered with an HTTP error status."""
     if not 200 <= response.status_code < 300:  # noqa: PLR2004
         raise _http_error(response)
+
+
+def parse_status(response: HttpResponse) -> QueryStatus:
+    """Parse a Coordinator response, raising if it reports a failure."""
+    check_status(response)
     if len(response.content.strip()) == 0:
         msg = f"received an empty response from the Coordinator (status {response.status_code})"
         raise TrinoConnectionError(msg)
