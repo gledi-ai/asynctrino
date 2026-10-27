@@ -27,7 +27,7 @@ from asynctrino._core.session import (
     session_timezone,
 )
 from asynctrino._core.status import Column, Row
-from asynctrino._http import DEFAULT_REQUEST_TIMEOUT, Transport, fetch_more, submit
+from asynctrino._http import DEFAULT_REQUEST_TIMEOUT, QueryRunner, Transport
 from asynctrino.exceptions import (
     DatabaseError,
     DataError,
@@ -128,7 +128,7 @@ class Connection:
     ) -> None:
         self._coordinator = coordinator
         self._session = SessionState(session)
-        self._transport = transport
+        self._runner = QueryRunner(transport)
         self._legacy_primitive_types = legacy_primitive_types
 
     def cursor(
@@ -151,14 +151,18 @@ class Connection:
             self,
             self._coordinator,
             self._session,
-            self._transport,
+            self._runner,
             stats_callback,
             legacy_primitive_types=legacy_primitive_types,
         )
 
     async def close(self) -> None:
-        """Close the connection and the HTTP client, if asynctrino created it."""
-        await self._transport.aclose()
+        """Close the connection and the HTTP client, if asynctrino created it.
+
+        Unfinished queries of its cursors are cancelled first, as :meth:`Cursor.close` does.
+        """
+        await self._runner.abandon_all()
+        await self._runner.transport.aclose()
 
     async def __aenter__(self) -> Self:
         return self
@@ -175,6 +179,11 @@ class Connection:
 class Cursor:
     """Executes statements and fetches their rows. Create it with :meth:`Connection.cursor`.
 
+    Cursors of one autocommit connection can be used from concurrent tasks, one task per cursor.
+    If the task awaiting :meth:`execute` or a fetch is cancelled, for instance by
+    ``asyncio.timeout``, the query is cancelled on the Coordinator best-effort before the
+    ``CancelledError`` propagates.
+
     Attributes:
         arraysize: How many rows :meth:`fetchmany` returns when no size is given.
     """
@@ -184,7 +193,7 @@ class Cursor:
         connection: Connection,
         coordinator: Coordinator,
         session: SessionState,
-        transport: Transport,
+        runner: QueryRunner,
         stats_callback: StatsCallback | None = None,
         *,
         legacy_primitive_types: bool,
@@ -192,7 +201,7 @@ class Cursor:
         self._connection = connection
         self._coordinator = coordinator
         self._session = session
-        self._transport = transport
+        self._runner = runner
         self._stats_callback = stats_callback
         self._legacy_primitive_types = legacy_primitive_types
         self._query: Query | None = None
@@ -307,7 +316,7 @@ class Cursor:
         query = self._executed_query()
         size = self.arraysize if size is None else size
         rows = query.take_rows(size)
-        while len(rows) < size and await fetch_more(query, self._transport):
+        while len(rows) < size and await self._runner.fetch_more(query):
             rows.extend(query.take_rows(size - len(rows)))
         return rows
 
@@ -315,13 +324,30 @@ class Cursor:
         """Return every remaining row."""
         query = self._executed_query()
         rows = query.take_rows()
-        while await fetch_more(query, self._transport):
+        while await self._runner.fetch_more(query):
             rows.extend(query.take_rows())
         return rows
 
+    async def cancel(self) -> None:
+        """Cancel the running statement on the Coordinator; it then returns no more rows.
+
+        Does nothing if no statement is running.
+
+        Raises:
+            TrinoConnectionError: The Coordinator could not be reached or refused to cancel.
+        """
+        if self._query is not None:
+            await self._runner.cancel(self._query)
+
     async def close(self) -> None:
-        """Close the cursor; any further use raises :class:`ProgrammingError`."""
+        """Close the cursor; any further use raises :class:`ProgrammingError`.
+
+        An unfinished query is cancelled on the Coordinator best-effort: a failure to cancel it
+        is logged to the ``asynctrino`` logger, not raised.
+        """
         self._closed = True
+        if self._query is not None:
+            await self._runner.abandon(self._query)
 
     def __aiter__(self) -> Self:
         return self
@@ -358,7 +384,7 @@ class Cursor:
             legacy_primitive_types=self._legacy_primitive_types,
         )
         self._query = query
-        await submit(query, self._transport)
+        await self._runner.submit(query)
         return query
 
     def _check_open(self) -> None:

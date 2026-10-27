@@ -1,8 +1,11 @@
 """The thin async layer that sends the protocol core's requests through httpx2."""
 
 import asyncio
+import logging
 import random
 import ssl
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from itertools import count
 
@@ -12,9 +15,15 @@ import truststore
 from asynctrino._core.messages import HttpRequest, HttpResponse
 from asynctrino._core.query import Query
 from asynctrino._core.retry import RetryPolicy
+from asynctrino._core.status import check_status
 from asynctrino.exceptions import TrinoConnectionError
 
 DEFAULT_REQUEST_TIMEOUT = 30.0
+CANCEL_TIMEOUT = 5.0
+
+logger = logging.getLogger("asynctrino")
+
+_abandoning: set[asyncio.Task[None]] = set()
 
 
 class Transport:
@@ -99,17 +108,82 @@ def _ssl_context(*, verify: bool | ssl.SSLContext) -> bool | ssl.SSLContext:
     return verify
 
 
-async def submit(query: Query, transport: Transport) -> None:
-    """Submit ``query`` and poll until it is ready: rows or columns are known, or it finished."""
-    query.receive(await transport.send(query.start()))
-    while not query.ready:
-        await fetch_more(query, transport)
+class QueryRunner:
+    """Sends the requests of one connection's queries and cancels the ones left running.
+
+    It tracks every query that may still be running on the Coordinator until it finishes or is
+    cancelled. If the task awaiting a query's request is cancelled, the query is abandoned.
+    """
+
+    def __init__(self, transport: Transport) -> None:
+        self.transport = transport
+        self._running: set[Query] = set()
+
+    async def submit(self, query: Query) -> None:
+        """Submit ``query`` and poll until it is ready: rows or columns are known, or it ended."""
+        async with self._tracking(query):
+            query.receive(await self.transport.send(query.start()))
+            while not query.ready:
+                await self._fetch(query)
+
+    async def fetch_more(self, query: Query) -> bool:
+        """Fetch the next page of ``query``; return ``False`` if it had already ended."""
+        async with self._tracking(query):
+            return await self._fetch(query)
+
+    async def cancel(self, query: Query) -> None:
+        """Cancel ``query`` on the Coordinator, if it is still running.
+
+        Raises:
+            TrinoConnectionError: The Coordinator could not be reached or refused the ``DELETE``.
+        """
+        self._running.discard(query)
+        request = query.cancel()
+        if request is not None:
+            check_status(await self.transport.send(request))
+
+    async def abandon(self, query: Query) -> None:
+        """Cancel ``query`` best-effort, even if the calling task is cancelled meanwhile.
+
+        The ``DELETE`` runs in its own task, shielded from the caller's cancellation and bounded
+        by :data:`CANCEL_TIMEOUT`. Its failures are logged, never raised.
+        """
+        self._running.discard(query)
+        request = query.cancel()
+        if request is None:
+            return
+        task = asyncio.create_task(_delete_quietly(query, request, self.transport))
+        _abandoning.add(task)
+        task.add_done_callback(_abandoning.discard)
+        await asyncio.shield(task)
+
+    async def abandon_all(self) -> None:
+        """Abandon every query still running, concurrently."""
+        await asyncio.gather(*(self.abandon(query) for query in list(self._running)))
+
+    async def _fetch(self, query: Query) -> bool:
+        request = query.advance()
+        if request is None:
+            return False
+        query.receive(await self.transport.send(request))
+        return True
+
+    @asynccontextmanager
+    async def _tracking(self, query: Query) -> AsyncGenerator[None]:
+        self._running.add(query)
+        try:
+            yield
+        except asyncio.CancelledError:
+            await self.abandon(query)
+            raise
+        finally:
+            if not query.running:
+                self._running.discard(query)
 
 
-async def fetch_more(query: Query, transport: Transport) -> bool:
-    """Fetch the next page of ``query``; return ``False`` if it had already finished."""
-    request = query.advance()
-    if request is None:
-        return False
-    query.receive(await transport.send(request))
-    return True
+async def _delete_quietly(query: Query, request: HttpRequest, transport: Transport) -> None:
+    try:
+        async with asyncio.timeout(CANCEL_TIMEOUT):
+            check_status(await transport.send(request))
+    except Exception:
+        logger.warning("failed to cancel query %s", query.query_id, exc_info=True)
