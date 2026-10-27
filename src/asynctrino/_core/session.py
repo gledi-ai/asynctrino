@@ -7,6 +7,8 @@ from dataclasses import dataclass, field, replace
 from urllib.parse import quote, quote_plus, unquote_plus
 from zoneinfo import ZoneInfo
 
+from asynctrino._core.transaction import NO_TRANSACTION
+
 DEFAULT_SOURCE = "asynctrino"
 
 _LEGACY_ROLE = re.compile(r"^ROLE\{.*\}$")
@@ -74,6 +76,8 @@ class ClientSession:
     extra_credential: tuple[tuple[str, str], ...] = ()
     timezone: str | None = None
     http_headers: Mapping[str, str] = field(default_factory=dict[str, str])
+    transaction_id: str | None = None
+    """``None`` in autocommit; otherwise the open transaction's id, or ``"NONE"`` between them."""
 
     def __post_init__(self) -> None:
         for name in self.http_headers:
@@ -104,6 +108,7 @@ class ClientSession:
                 ", ".join(f"{k}={quote_plus(v)}" for k, v in self.extra_credential)
             ),
             "X-Trino-Time-Zone": self.timezone,
+            "X-Trino-Transaction-Id": self.transaction_id,
         }
         present = {name: value for name, value in values.items() if value is not None}
         return {**present, **self.http_headers}
@@ -125,7 +130,21 @@ class ClientSession:
             authorization_user=authorization_user,
             properties=properties,
             roles={**self.roles, **updates.assignments("x-trino-set-role")},
+            transaction_id=self._transaction_id_after(updates),
         )
+
+    @property
+    def in_transaction(self) -> bool:
+        """Whether a transaction is open, so statements run inside it."""
+        return self.transaction_id not in {None, NO_TRANSACTION}
+
+    def _transaction_id_after(self, updates: _ResponseHeaders) -> str | None:
+        if self.transaction_id is None:
+            return None
+        if len(updates.values("x-trino-clear-transaction-id")) > 0:
+            return NO_TRANSACTION
+        started = updates.last("x-trino-started-transaction-id", None)
+        return self.transaction_id if started in {None, "", NO_TRANSACTION} else started
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,3 +184,7 @@ class SessionState:
     def apply(self, response_headers: Mapping[str, str]) -> None:
         """Apply a Coordinator response's session updates."""
         self.current = self.current.updated(response_headers)
+
+    def end_transaction(self) -> None:
+        """Forget the open transaction, so the next statement starts another."""
+        self.current = replace(self.current, transaction_id=NO_TRANSACTION)
