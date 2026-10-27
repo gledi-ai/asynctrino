@@ -236,8 +236,12 @@ class TrinoSQLCompiler(compiler.SQLCompiler):
 
     @override
     def visit_frame_clause(self, frameclause: FrameClause, **kw: object) -> str:
-        """Render frame offsets as literals, since Trino doesn't accept parameters there."""
-        return super().visit_frame_clause(frameclause, **{**kw, "literal_binds": True})
+        """Render frame offsets as literals, since Trino doesn't accept parameters there.
+
+        They are rendered when the statement executes, so a cached statement takes each
+        execution's offsets.
+        """
+        return super().visit_frame_clause(frameclause, **{**kw, "literal_execute": True})
 
     def visit_try_cast(self, cast: TryCast[object], **kw: object) -> str:
         """Render ``try_cast(x as type)``, which yields ``NULL`` where the cast fails."""

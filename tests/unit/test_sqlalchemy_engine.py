@@ -9,15 +9,30 @@ from typing import Protocol, cast
 
 import httpx2
 import pytest
-from sqlalchemy import Column, Double, Float, MetaData, Table, exc, literal, select, text
+from sqlalchemy import (
+    Column,
+    Double,
+    Float,
+    Integer,
+    MetaData,
+    Select,
+    Table,
+    exc,
+    func,
+    literal,
+    select,
+    text,
+)
+from sqlalchemy import cast as sql_cast
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from asynctrino.auth import BasicAuthentication
 from asynctrino.dbapi import Connection
 from asynctrino.exceptions import TrinoDataError
-from asynctrino.sqlalchemy import JSON, URL
+from asynctrino.sqlalchemy import JSON, TIME, TIMESTAMP, URL
 from tests.unit.coordinator import (
     BASE_URL,
+    CatalogCoordinator,
     FakeCoordinator,
     TransactionCoordinator,
     column,
@@ -372,3 +387,38 @@ async def test_undecodable_segment_data_keeps_the_connection_in_the_pool() -> No
 
         assert isinstance(excinfo.value.orig, TrinoDataError)
         assert not excinfo.value.connection_invalidated
+
+
+async def test_a_cached_statement_renders_each_executions_own_values() -> None:
+    coordinator = CatalogCoordinator()
+    t = Table("t", MetaData(), Column("x", Integer))
+
+    def windowed(n: int) -> Select[tuple[int | None]]:
+        total = func.sum(t.c.x).over(order_by=t.c.x, rows=(-n, 0))
+        return select(total).where(t.c.x > n)
+
+    async with connection_to(coordinator) as conn:
+        _ = await conn.execute(windowed(2))
+        result = await conn.execute(windowed(5))
+
+        assert "cached since" in result.context._get_cache_stats()
+
+    first, second = coordinator.statements()
+    assert "ROWS BETWEEN 2 PRECEDING AND CURRENT ROW" in first
+    assert first.endswith("USING 2")
+    assert "ROWS BETWEEN 5 PRECEDING AND CURRENT ROW" in second
+    assert second.endswith("USING 5")
+
+
+@pytest.mark.parametrize("type_", [TIME, TIMESTAMP])
+async def test_a_cached_cast_tells_time_zones_apart(type_: type[TIME | TIMESTAMP]) -> None:
+    coordinator = CatalogCoordinator()
+    t = Table("t", MetaData(), Column("x", Integer))
+
+    async with connection_to(coordinator) as conn:
+        _ = await conn.execute(select(sql_cast(t.c.x, type_(3))))
+        _ = await conn.execute(select(sql_cast(t.c.x, type_(3, timezone=True))))
+
+    local, zoned = coordinator.statements()
+    assert f"{type_.__name__}(3))" in local
+    assert f"{type_.__name__}(3) WITH TIME ZONE)" in zoned

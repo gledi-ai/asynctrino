@@ -85,7 +85,7 @@ class TrinoDialect(DefaultDialect):
     name = "trino"
     driver = "asynctrino"
     is_async = True
-    supports_statement_cache = False
+    supports_statement_cache = True
     supports_server_side_cursors = True
     has_terminate = True
     execution_ctx_cls = TrinoExecutionContext

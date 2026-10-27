@@ -82,7 +82,7 @@ class TIME(sqltypes.TIME):
 
     __visit_name__ = "TIME"
 
-    def __init__(self, precision: int | None = None, *, timezone: bool = False) -> None:
+    def __init__(self, precision: int | None = None, timezone: bool = False) -> None:  # noqa: FBT001, FBT002  # SQLAlchemy's type cache key skips keyword-only parameters
         super().__init__(timezone=timezone)
         self.precision: int | None = precision
 
@@ -92,7 +92,7 @@ class TIMESTAMP(sqltypes.TIMESTAMP):
 
     __visit_name__ = "TIMESTAMP"
 
-    def __init__(self, precision: int | None = None, *, timezone: bool = False) -> None:
+    def __init__(self, precision: int | None = None, timezone: bool = False) -> None:  # noqa: FBT001, FBT002  # SQLAlchemy's type cache key skips keyword-only parameters
         super().__init__(timezone=timezone)
         self.precision: int | None = precision
 

@@ -446,9 +446,8 @@ by_id = table_without_catalog.c.id
 def test_window_frame_bounds_are_literals(
     dialect: TrinoDialect, window: Over[int], expected: str
 ) -> None:
-    query = select(window).compile(dialect=dialect)
+    query = select(window).compile(dialect=dialect, compile_kwargs={"render_postcompile": True})
 
     assert str(query) == (
         f'SELECT sum("table".id) OVER (ORDER BY "table".id {expected}) AS anon_1 \nFROM "table"'
     )
-    assert query.params == {}
