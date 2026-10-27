@@ -39,7 +39,7 @@ class HttpResponse:
 def redact(url: str) -> str:
     """``url`` without userinfo, query and fragment, which may hold credentials."""
     parts = urlsplit(url)
-    host = parts.hostname or ""
+    host = "" if parts.hostname is None else parts.hostname
     if ":" in host:
         host = f"[{host}]"
     netloc = host if parts.port is None else f"{host}:{parts.port}"
