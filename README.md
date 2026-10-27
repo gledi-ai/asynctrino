@@ -432,7 +432,9 @@ honouring `Retry-After` and otherwise backing off exponentially with jitter.
 - Authentication and `X-Trino-*` headers go to the Coordinator only. Segment downloads and
   acknowledgements carry only the Segment's own headers, and your `http_headers` are never
   forwarded to Segment URIs, even ones the Coordinator hosts (Upstream 0.339 forwards them).
-- Credentials are refused for a server-supplied URI on another origin or downgraded to `http`.
+- Credentials and `X-Trino-*` headers only go to the Coordinator's own scheme, host and port. A
+  `nextUri` pointing anywhere else raises `TrinoAuthError` before any request is sent to it; with
+  `allow_insecure_auth`, an `https` Coordinator may hand out `http` URIs on the same host and port.
 - Built-in authentication is Basic and JWT only. There is no OAuth2, Kerberos, certificate
   authentication or keyring support; pass any `httpx2.Auth` instead.
 - httpx2 exceptions are mapped to `TrinoConnectionError` and the rest of the asynctrino

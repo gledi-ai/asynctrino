@@ -125,8 +125,14 @@ class Query:
         return HttpRequest("DELETE", self._next_uri, self._headers())
 
     def receive(self, response: HttpResponse) -> None:
-        """Apply a Coordinator response to the query's state and buffer its rows."""
+        """Apply a Coordinator response to the query's state and buffer its rows.
+
+        Raises:
+            TrinoAuthError: The response's ``nextUri`` is on another origin than the Coordinator.
+        """
         status = parse_status(response)
+        if status.next_uri is not None:
+            self._coordinator.check_origin(status.next_uri)
         self._session.apply(response.headers)
         self._started = True
         self.query_id = status.id

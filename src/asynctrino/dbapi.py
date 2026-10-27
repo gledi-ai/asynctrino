@@ -786,7 +786,9 @@ def connect(  # noqa: PLR0913
             names an unsupported encoding.
         zoneinfo.ZoneInfoNotFoundError: ``timezone`` is not a known IANA time zone.
     """
-    coordinator = Coordinator.resolve(host, port, http_scheme)
+    coordinator = Coordinator.resolve(
+        host, port, http_scheme, allow_insecure_auth=allow_insecure_auth
+    )
     if heartbeat_interval is not None and heartbeat_interval < 0:
         msg = f"heartbeat_interval must not be negative, got {heartbeat_interval}"
         raise ValueError(msg)

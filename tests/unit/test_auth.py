@@ -165,3 +165,73 @@ def test_built_in_schemes_compare_by_value_and_hide_secrets() -> None:
     assert JWTAuthentication("token") == JWTAuthentication("token")
     assert "s3cret" not in repr(BasicAuthentication("alice", "s3cret"))
     assert "token" not in repr(JWTAuthentication("token"))
+
+
+def redirecting_coordinator(next_uri: str) -> FakeCoordinator:
+    coordinator = secure_coordinator()
+    coordinator.pages[0]["nextUri"] = next_uri
+    return coordinator
+
+
+@pytest.mark.parametrize(
+    "next_uri",
+    [
+        "https://attacker:8443/v1/statement/executing/q/y/1",
+        "https://coordinator:9443/v1/statement/executing/q/y/1",
+        "http://coordinator:8443/v1/statement/executing/q/y/1",
+        "https://coordinator:port/v1/statement/executing/q/y/1",
+    ],
+    ids=["other-host", "other-port", "downgraded-to-http", "invalid-port"],
+)
+@pytest.mark.parametrize("auth", [BasicAuthentication("a", "b"), None], ids=["auth", "no-auth"])
+async def test_coordinator_requests_are_refused_for_a_next_uri_on_another_origin(
+    next_uri: str, auth: httpx2.Auth | None
+) -> None:
+    coordinator = redirecting_coordinator(next_uri)
+    async with coordinator.client() as client:
+        conn = connect(host=TLS_BASE_URL, auth=auth, http_client=client)
+
+        with pytest.raises(TrinoAuthError, match="another origin"):
+            await conn.cursor().execute("SELECT 1")
+        await conn.close()
+
+    assert [str(r.url) for r in coordinator.requests if str(r.url).startswith(next_uri)] == []
+
+
+async def test_allow_insecure_auth_follows_next_uris_downgraded_to_http() -> None:
+    coordinator = FakeCoordinator(
+        statement_pages(
+            columns=[column("_col0", "integer")],
+            batches=[[[1]], [[2]]],
+            base_url="http://coordinator:8443",
+        )
+    )
+    async with coordinator.client() as client:
+        conn = connect(
+            host=TLS_BASE_URL,
+            auth=JWTAuthentication("t"),
+            allow_insecure_auth=True,
+            http_client=client,
+        )
+        cur = conn.cursor()
+        await cur.execute("SELECT 1")
+
+        assert await cur.fetchall() == [[1], [2]]
+
+    assert coordinator.requests[1].url.scheme == "http"
+    assert coordinator.requests[1].headers["Authorization"] == "Bearer t"
+
+
+async def test_a_next_uri_with_the_default_port_left_implicit_is_followed() -> None:
+    coordinator = FakeCoordinator(
+        statement_pages(
+            columns=[column("_col0", "integer")], batches=[[[1]]], base_url="https://coordinator"
+        )
+    )
+    async with coordinator.client() as client:
+        cur = connect(
+            host="https://coordinator:443", auth=JWTAuthentication("t"), http_client=client
+        ).cursor()
+        await cur.execute("SELECT 1")
+
+        assert await cur.fetchall() == [[1]]

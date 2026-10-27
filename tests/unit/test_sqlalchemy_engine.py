@@ -15,6 +15,7 @@ from asynctrino.auth import BasicAuthentication
 from asynctrino.dbapi import Connection
 from asynctrino.sqlalchemy import JSON, URL
 from tests.unit.coordinator import (
+    BASE_URL,
     FakeCoordinator,
     TransactionCoordinator,
     column,
@@ -58,9 +59,11 @@ async def query(engine: AsyncEngine, sql: str) -> list[tuple[object, ...]]:
         return [tuple(row) for row in result.all()]
 
 
-def one_row_coordinator() -> FakeCoordinator:
+def one_row_coordinator(base_url: str = BASE_URL) -> FakeCoordinator:
     return FakeCoordinator(
-        statement_pages(columns=[column("_col0", "integer")], batches=[[[1]]], queued_pages=0)
+        statement_pages(
+            columns=[column("_col0", "integer")], batches=[[[1]]], queued_pages=0, base_url=base_url
+        )
     )
 
 
@@ -96,7 +99,7 @@ def test_dbapi_version_is_the_installed_asynctrino_release() -> None:
 
 
 async def test_url_options_reach_the_coordinator() -> None:
-    coordinator = one_row_coordinator()
+    coordinator = one_row_coordinator("https://coordinator:8443")
     url = URL(
         "coordinator",
         port=8443,
