@@ -6,6 +6,7 @@ from http import HTTPStatus
 from typing import Any, NotRequired, TypedDict, cast
 
 from asynctrino._core.messages import HttpResponse
+from asynctrino._core.segments import Segment, SpooledDataJSON, parse_segments
 from asynctrino.exceptions import (
     Http502Error,
     Http503Error,
@@ -44,7 +45,7 @@ class _QueryResults(TypedDict):
     stats: dict[str, object]
     nextUri: NotRequired[str]
     columns: NotRequired[list[Column]]
-    data: NotRequired[list[Row]]
+    data: NotRequired[list[Row] | SpooledDataJSON]
     error: NotRequired[dict[str, object]]
     warnings: NotRequired[list[dict[str, object]]]
     updateType: NotRequired[str]
@@ -61,6 +62,7 @@ class QueryStatus:
     stats: dict[str, object]
     columns: list[Column] | None
     rows: list[Row]
+    segments: list[Segment]
     warnings: list[dict[str, object]]
     update_type: str | None
     update_count: int | None
@@ -69,7 +71,7 @@ class QueryStatus:
 def parse_status(response: HttpResponse) -> QueryStatus:
     """Parse a Coordinator response, raising if it reports a failure."""
     if not 200 <= response.status_code < 300:  # noqa: PLR2004
-        raise _http_error(response)
+        raise http_error(response)
     if len(response.content.strip()) == 0:
         msg = f"received an empty response from the Coordinator (status {response.status_code})"
         raise TrinoConnectionError(msg)
@@ -80,13 +82,15 @@ def parse_status(response: HttpResponse) -> QueryStatus:
         raise TrinoConnectionError(msg) from e
     if "error" in results:
         raise _query_error(results["error"], results.get("id"))
+    data = results.get("data", [])
     return QueryStatus(
         id=results["id"],
         info_uri=results["infoUri"],
         next_uri=results.get("nextUri"),
         stats=results["stats"],
         columns=results.get("columns"),
-        rows=results.get("data", []),
+        rows=data if isinstance(data, list) else [],
+        segments=[] if isinstance(data, list) else parse_segments(data),
         warnings=results.get("warnings", []),
         update_type=results.get("updateType"),
         update_count=results.get("updateCount"),
@@ -108,7 +112,8 @@ def _query_error(error: dict[str, object], query_id: str | None) -> TrinoQueryEr
 _HTTP_ERRORS: dict[int, type[HttpError]] = {502: Http502Error, 503: Http503Error, 504: Http504Error}
 
 
-def _http_error(response: HttpResponse) -> TrinoAuthError | HttpError:
+def http_error(response: HttpResponse) -> TrinoAuthError | HttpError:
+    """The error for a response whose HTTP status reports a failure."""
     body = response.content.decode(errors="replace")
     if response.status_code == HTTPStatus.UNAUTHORIZED:
         return TrinoAuthError(f"error {response.status_code}: {body}")

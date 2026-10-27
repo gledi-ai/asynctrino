@@ -89,6 +89,7 @@ class ClientSession:
     extra_credential: tuple[tuple[str, str], ...] = ()
     timezone: str | None = None
     http_headers: Mapping[str, str] = field(default_factory=dict[str, str])
+    encoding: str | None = None
 
     def __post_init__(self) -> None:
         for name in self.http_headers:
@@ -120,6 +121,7 @@ class ClientSession:
             ),
             "X-Trino-Time-Zone": self.timezone,
             "X-Trino-Client-Capabilities": CLIENT_CAPABILITIES,
+            "X-Trino-Query-Data-Encoding": self.encoding,
         }
         present = {name: value for name, value in values.items() if value is not None}
         return {**present, **self.http_headers}

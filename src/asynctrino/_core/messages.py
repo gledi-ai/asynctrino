@@ -14,6 +14,8 @@ class HttpRequest:
     Attributes:
         statement: Whether this is a statement POST or ``nextUri`` GET, whose empty 200
             responses are retried.
+        segment: Whether this is a Segment download or acknowledgement, sent with ``headers``
+            only: no auth, client default headers or cookies.
     """
 
     method: Method
@@ -21,6 +23,7 @@ class HttpRequest:
     headers: Mapping[str, str]
     content: bytes | None = None
     statement: bool = False
+    segment: bool = False
 
 
 @dataclass(frozen=True, slots=True)

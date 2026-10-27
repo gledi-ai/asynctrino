@@ -5,6 +5,12 @@ from asynctrino.dbapi import Connection, connect
 from asynctrino.exceptions import TrinoQueryError
 
 
+@pytest.fixture
+def conn(encoded_conn: Connection) -> Connection:
+    """Run every test here over the Direct protocol and the Spooling protocol's encodings."""
+    return encoded_conn
+
+
 async def test_select_1(conn: Connection) -> None:
     cur = conn.cursor()
     await cur.execute("SELECT 1")
