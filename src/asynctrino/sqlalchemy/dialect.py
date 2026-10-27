@@ -13,6 +13,7 @@ from sqlalchemy.engine.interfaces import (
     DBAPIConnection,
     DBAPICursor,
     DBAPIModule,
+    ReflectedColumn,
     ReflectedIndex,
 )
 from sqlalchemy.engine.interfaces import IsolationLevel as SQLAlchemyIsolationLevel
@@ -35,7 +36,13 @@ from asynctrino.sqlalchemy._compiler import (
     TrinoSQLCompiler,
     TrinoTypeCompiler,
 )
-from asynctrino.sqlalchemy._types import VARBINARY, FloatAsDouble, JSONIndexType, JSONPathType
+from asynctrino.sqlalchemy._types import (
+    VARBINARY,
+    FloatAsDouble,
+    JSONIndexType,
+    JSONPathType,
+    parse_sqltype,
+)
 from asynctrino.sqlalchemy._url import DEFAULT_SOURCE
 
 _PLAIN_QUERY_OPTIONS = ("source", "timezone")
@@ -213,7 +220,7 @@ class TrinoDialect(DefaultDialect):
         schema: str | None = None,
         **kw: object,
     ) -> bool:
-        schema = schema or self._get_default_schema_name(connection)
+        schema = self._schema(connection, schema)
         if schema is None:
             return False
         query = text(
@@ -222,6 +229,38 @@ class TrinoDialect(DefaultDialect):
         )
         result = connection.execute(query, {"schema": schema, "table": table_name})
         return result.first() is not None
+
+    @override
+    def get_columns(
+        self,
+        connection: SQLAlchemyConnection,
+        table_name: str,
+        schema: str | None = None,
+        **kw: object,
+    ) -> list[ReflectedColumn]:
+        """The table's columns, their types parsed from Trino's type strings.
+
+        Raises:
+            NoSuchTableError: The table doesn't exist.
+        """
+        self._require_table(connection, table_name, schema)
+        query = text(
+            'SELECT "column_name", "data_type", "column_default", "is_nullable", "comment"'
+            ' FROM "information_schema"."columns"'
+            ' WHERE "table_schema" = :schema AND "table_name" = :table'
+            ' ORDER BY "ordinal_position"'
+        )
+        parameters = {"schema": self._required_schema(connection, schema), "table": table_name}
+        return [
+            {
+                "name": row.column_name,
+                "type": parse_sqltype(row.data_type),
+                "nullable": row.is_nullable.upper() == "YES",
+                "default": row.column_default,
+                "comment": row.comment,
+            }
+            for row in connection.execute(query, parameters)
+        ]
 
     @override
     def get_indexes(
@@ -249,9 +288,9 @@ class TrinoDialect(DefaultDialect):
     def _partition_columns(
         self, connection: SQLAlchemyConnection, table_name: str, schema: str | None
     ) -> list[str]:
-        schema = schema or self._get_default_schema_name(connection)
         quote = self.identifier_preparer.quote_identifier
-        partitions = f"{quote(schema or '')}.{quote(f'{table_name}$partitions')}"
+        schema = self._required_schema(connection, schema)
+        partitions = f"{quote(schema)}.{quote(f'{table_name}$partitions')}"
         # Only the columns are read, so the query is cancelled rather than drained.
         result = connection.execute(
             text(f"SELECT * FROM {partitions}"),  # noqa: S608
@@ -276,6 +315,16 @@ class TrinoDialect(DefaultDialect):
         if not self.has_table(connection, table_name, schema):
             msg = f"schema={schema}, table={table_name}"
             raise exc.NoSuchTableError(msg)
+
+    def _schema(self, connection: SQLAlchemyConnection, schema: str | None) -> str | None:
+        return schema or self._get_default_schema_name(connection)
+
+    def _required_schema(self, connection: SQLAlchemyConnection, schema: str | None) -> str:
+        schema = self._schema(connection, schema)
+        if schema is None:
+            msg = "schema is required"
+            raise exc.NoSuchTableError(msg)
+        return schema
 
 
 def _driver_connection(connection: SQLAlchemyConnection) -> Connection:

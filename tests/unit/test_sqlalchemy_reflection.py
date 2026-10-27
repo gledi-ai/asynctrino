@@ -1,13 +1,15 @@
 """Reflection through the async engine, against a scripted Coordinator."""
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 
 import pytest
-from sqlalchemy import Connection, exc, inspect
+from sqlalchemy import Connection, exc, inspect, types
 from sqlalchemy.engine.interfaces import ReflectedIndex
+from sqlalchemy.engine.reflection import Inspector
 from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 
+from asynctrino.sqlalchemy import MAP
 from tests.unit.coordinator import JSON, CatalogCoordinator, column, statement_pages
 
 TABLES = '"information_schema"."tables"'
@@ -120,4 +122,51 @@ async def test_partitions_are_read_from_the_connection_schema() -> None:
 async def test_indexes_of_a_missing_table_raise() -> None:
     with pytest.raises(exc.NoSuchTableError):
         _ = await indexes_of(CatalogCoordinator(), "missing")
+
+
+COLUMNS = '"information_schema"."columns"'
+
+
+async def inspected[T](coordinator: CatalogCoordinator, reflect: Callable[[Inspector], T]) -> T:
+    async with connection_to(coordinator) as conn:
+        return await conn.run_sync(lambda sync_conn: reflect(inspect(sync_conn)))
+
+
+async def test_columns_reflect_with_parsed_types_and_comments() -> None:
+    columns = result(
+        "columns",
+        [
+            column("column_name", "varchar"),
+            column("data_type", "varchar"),
+            column("column_default", "varchar"),
+            column("is_nullable", "varchar"),
+            column("comment", "varchar"),
+        ],
+        [
+            ["id", "bigint", None, "NO", "the id"],
+            ["tags", "map(varchar, array(integer))", None, "YES", None],
+        ],
+    )
+    coordinator = CatalogCoordinator({TABLES: table_exists("visits"), COLUMNS: columns})
+
+    [id_column, tags_column] = await inspected(coordinator, lambda i: i.get_columns("visits"))
+
+    assert (id_column["name"], id_column["nullable"], id_column["comment"]) == (
+        "id",
+        False,
+        "the id",
+    )
+    assert isinstance(id_column["type"], types.BIGINT)
+    assert (tags_column["name"], tags_column["nullable"], tags_column["comment"]) == (
+        "tags",
+        True,
+        None,
+    )
+    assert isinstance(tags_column["type"], MAP)
+    assert isinstance(tags_column["type"].value_type, types.ARRAY)
+
+
+async def test_columns_of_a_missing_table_raise() -> None:
+    with pytest.raises(exc.NoSuchTableError):
+        _ = await inspected(CatalogCoordinator(), lambda i: i.get_columns("missing"))
 
