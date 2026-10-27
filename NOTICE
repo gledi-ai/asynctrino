@@ -1,0 +1,15 @@
+asynctrino
+Copyright 2026 Gledi Caushaj
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+asynctrino ports behaviour and code from the following Apache-2.0 licensed projects:
+
+* trino-python-client (https://github.com/trinodb/trino-python-client)
+  Copyright the Trino Python client authors and the Trino Software Foundation.
+
+* aiotrino (https://github.com/mvanderlee/aiotrino)
+  Original asyncio Trino client by Michiel van der Lee and contributors.
+
+* aiotrino, maintained fork (https://github.com/gledi-ai/aiotrino)
+  The sibling project asynctrino is ported from, module by module.

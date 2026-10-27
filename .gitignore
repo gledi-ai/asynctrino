@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+.nox/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+htmlcov/
+.coverage
+.coverage.*
+coverage*.xml
+junit*.xml
+.envrc

@@ -1,0 +1,120 @@
+[project]
+name = "asynctrino"
+dynamic = ["version"]
+description = "Fully typed asyncio client for the Trino distributed SQL engine, built on httpx2"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+requires-python = ">=3.14,<3.16"
+authors = [{ name = "Gledi Caushaj", email = "201947707+gledi-ai@users.noreply.github.com" }]
+keywords = ["trino", "asyncio", "database", "sql", "dbapi", "httpx2"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Framework :: AsyncIO",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: 3.15",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Topic :: Database :: Front-Ends",
+  "Typing :: Typed",
+]
+dependencies = ["httpx2>=2.15"]
+
+[project.urls]
+Homepage = "https://github.com/gledi-ai/asynctrino"
+Repository = "https://github.com/gledi-ai/asynctrino"
+Issues = "https://github.com/gledi-ai/asynctrino/issues"
+
+[dependency-groups]
+dev = [
+  "coverage[toml]>=7.10",
+  "nox>=2025.5.1",
+  "nox-uv>=0.6",
+  "pyrefly>=0.40",
+  "pytest>=8.4",
+  "pytest-asyncio>=1.2",
+  "pytest-cov>=7",
+  "pytest-xdist>=3.8",
+  "ruff>=0.14",
+  "testcontainers>=4.13",
+]
+
+[build-system]
+requires = ["hatchling", "uv-dynamic-versioning"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "uv-dynamic-versioning"
+
+[tool.uv-dynamic-versioning]
+vcs = "git"
+style = "pep440"
+pattern = "default"
+fallback-version = "0.0.0"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/asynctrino"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/src", "/tests", "/README.md", "/LICENSE", "/NOTICE"]
+
+[tool.uv]
+exclude-newer = "7 days"
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+src = ["src", "."]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+  "COM812", # conflicts with the formatter
+  "ISC001", # conflicts with the formatter
+  "CPY",    # no per-file copyright headers; LICENSE and NOTICE cover it
+  "D105",   # magic methods are documented by their protocol
+  "D107",   # __init__ is documented on the class
+  "TC001",  # with 3.14 deferred annotations, TYPE_CHECKING-only imports are pure churn
+  "TC002",
+  "TC003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "PLR2004", "SLF001", "D", "INP001"]
+"noxfile.py" = ["D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.pyrefly]
+project-includes = ["src", "tests", "noxfile.py"]
+python-version = "3.14"
+search-path = ["src", "."]
+preset = "all"
+strict-callable-subtyping = true
+strict-partial-subtyping = true
+check-unannotated-defs = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
+addopts = ["--strict-markers", "--strict-config", "-ra"]
+xfail_strict = true
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+source = ["asynctrino"]
+branch = true
+core = "sysmon"
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+skip_covered = true
+exclude_also = ["if TYPE_CHECKING:", "@overload"]
