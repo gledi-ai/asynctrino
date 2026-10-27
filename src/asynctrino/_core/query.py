@@ -106,6 +106,12 @@ class Query:
             return None
         return HttpRequest("GET", self._next_uri, self._headers(), statement=True)
 
+    def heartbeat(self) -> HttpRequest | None:
+        """The ``HEAD`` that keeps the query alive, or ``None`` once it has ended."""
+        if self._next_uri is None or self.cancelled:
+            return None
+        return HttpRequest("HEAD", self._next_uri, self._headers())
+
     def cancel(self) -> HttpRequest | None:
         """Abandon the query: the ``DELETE`` that stops it, or ``None`` if nothing is running.
 

@@ -20,7 +20,9 @@ from asynctrino._core.status import check_status
 from asynctrino.exceptions import Error, TrinoConnectionError
 
 DEFAULT_REQUEST_TIMEOUT = 30.0
+DEFAULT_HEARTBEAT_INTERVAL = 30.0
 CANCEL_TIMEOUT = 5.0
+MAX_HEARTBEAT_FAILURES = 3
 
 logger = logging.getLogger("asynctrino")
 
@@ -123,8 +125,9 @@ class QueryRunner:
     cancelled. If the task awaiting a query's request is cancelled, the query is abandoned.
     """
 
-    def __init__(self, transport: Transport) -> None:
+    def __init__(self, transport: Transport, *, heartbeat_interval: float | None = None) -> None:
         self.transport = transport
+        self.heartbeat_interval = heartbeat_interval
         self._running: set[Query] = set()
 
     async def submit(self, query: Query) -> None:
@@ -172,7 +175,9 @@ class QueryRunner:
     async def _fetch(self, query: Query) -> bool:
         segment = query.pending_segment
         if segment is not None:
-            await download_segment(query, segment, self.transport)
+            await download_segment(
+                query, segment, self.transport, heartbeat_interval=self.heartbeat_interval
+            )
             return True
         request = query.advance()
         if request is None:
@@ -201,10 +206,68 @@ async def _delete_quietly(query: Query, request: HttpRequest, transport: Transpo
         logger.warning("failed to cancel query %s", query.query_id, exc_info=True)
 
 
-async def download_segment(query: Query, segment: SpooledSegment, transport: Transport) -> None:
-    """Download and decode ``segment`` into ``query``'s rows, then acknowledge it."""
-    query.receive_segment(await segment_data(segment, transport))
+async def download_segment(
+    query: Query,
+    segment: SpooledSegment,
+    transport: Transport,
+    *,
+    heartbeat_interval: float | None = None,
+) -> None:
+    """Download and decode ``segment`` into ``query``'s rows, then acknowledge it.
+
+    With a ``heartbeat_interval``, the query is kept alive while the download runs, as
+    :func:`heartbeat` describes.
+    """
+    async with heartbeat(query, transport, heartbeat_interval):
+        data = await segment_data(segment, transport)
+    query.receive_segment(data)
     await acknowledge_segment(segment, transport)
+
+
+@asynccontextmanager
+async def heartbeat(
+    query: Query, transport: Transport, interval: float | None
+) -> AsyncGenerator[None]:
+    """Send ``HEAD`` to ``query``'s ``nextUri`` every ``interval`` seconds while the block runs.
+
+    The Coordinator abandons a query whose client stays silent for too long, as it does while a
+    slow Segment downloads. The heartbeat stops when the block exits, when the query has ended,
+    when the Coordinator answers 404 or 405, or after :data:`MAX_HEARTBEAT_FAILURES` consecutive
+    failures. Its failures are logged, never raised. ``None`` or ``0`` disables it.
+    """
+    if interval is None or interval == 0:
+        yield
+        return
+    task = asyncio.create_task(_beat(query, transport, interval))
+    try:
+        yield
+    finally:
+        _ = task.cancel()
+        _ = await asyncio.wait([task])
+
+
+async def _beat(query: Query, transport: Transport, interval: float) -> None:
+    failures = 0
+    while failures < MAX_HEARTBEAT_FAILURES:
+        await asyncio.sleep(interval)
+        request = query.heartbeat()
+        if request is None:
+            return
+        try:
+            response = await transport.send(request)
+        except Exception:
+            logger.debug("heartbeat for query %s failed", query.query_id, exc_info=True)
+            failures += 1
+            continue
+        if response.status_code in {404, 405}:
+            logger.warning("the Coordinator does not support heartbeats; stopping them")
+            return
+        failures = 0 if 200 <= response.status_code < 300 else failures + 1  # noqa: PLR2004
+    logger.warning(
+        "stopping the heartbeat for query %s after %d consecutive failures",
+        query.query_id,
+        MAX_HEARTBEAT_FAILURES,
+    )
 
 
 async def segment_data(segment: SpooledSegment, transport: Transport) -> bytes:

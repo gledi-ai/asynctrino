@@ -45,6 +45,7 @@ from asynctrino._core.transaction import (
     start_transaction,
 )
 from asynctrino._http import (
+    DEFAULT_HEARTBEAT_INTERVAL,
     DEFAULT_REQUEST_TIMEOUT,
     QueryRunner,
     Transport,
@@ -233,14 +234,12 @@ class Connection:
         self,
         coordinator: Coordinator,
         session: ClientSession,
-        transport: Transport,
+        runner: QueryRunner,
         *,
         legacy_primitive_types: bool,
         isolation_level: IsolationLevel = IsolationLevel.AUTOCOMMIT,
     ) -> None:
-        self._executor = _Executor(
-            coordinator, SessionState(session), QueryRunner(transport), isolation_level
-        )
+        self._executor = _Executor(coordinator, SessionState(session), runner, isolation_level)
         self._legacy_primitive_types = legacy_primitive_types
 
     @property
@@ -687,6 +686,7 @@ def connect(  # noqa: PLR0913
     http_client: httpx2.AsyncClient | None = None,
     legacy_primitive_types: bool = False,
     encoding: str | Sequence[str] | None = None,
+    heartbeat_interval: float | None = DEFAULT_HEARTBEAT_INTERVAL,
 ) -> Connection:
     """Create a connection to a Trino Coordinator without doing any I/O.
 
@@ -737,6 +737,8 @@ def connect(  # noqa: PLR0913
             preference: ``"json+zstd"``, ``"json+lz4"`` or ``"json"``, as a list or a
             comma-separated string. Without it, results use the Direct protocol, as they do
             when the server can't spool.
+        heartbeat_interval: Seconds between the ``HEAD`` requests that keep a query alive on
+            the Coordinator while a spooled Segment downloads. ``None`` or ``0`` disables them.
 
     Returns:
         A new :class:`Connection`.
@@ -744,13 +746,17 @@ def connect(  # noqa: PLR0913
     Raises:
         TrinoAuthError: ``auth`` is set for an ``http`` Coordinator without
             ``allow_insecure_auth``.
-        ValueError: ``max_attempts`` is less than 1, ``http_scheme`` or ``isolation_level`` is
-            unknown, an ``extra_credential`` key is not ASCII or contains whitespace or ``=``,
+        ValueError: ``max_attempts`` is less than 1, ``heartbeat_interval`` is negative,
+            ``http_scheme`` or ``isolation_level`` is unknown, an ``extra_credential`` key is
+            not ASCII or contains whitespace or ``=``,
             ``http_headers`` would override a header asynctrino sends itself, or ``encoding``
             names an unsupported encoding.
         zoneinfo.ZoneInfoNotFoundError: ``timezone`` is not a known IANA time zone.
     """
     coordinator = Coordinator.resolve(host, port, http_scheme)
+    if heartbeat_interval is not None and heartbeat_interval < 0:
+        msg = f"heartbeat_interval must not be negative, got {heartbeat_interval}"
+        raise ValueError(msg)
     if auth is not None and not coordinator.uses_tls and not allow_insecure_auth:
         raise TrinoAuthError(_INSECURE_AUTH_MESSAGE)
     isolation_level = IsolationLevel(isolation_level)
@@ -771,12 +777,15 @@ def connect(  # noqa: PLR0913
             transaction_id=None if autocommit else NO_TRANSACTION,
             encoding=format_encoding(encoding),
         ),
-        Transport(
-            http_client,
-            auth=auth,
-            verify=verify,
-            retry=RetryPolicy(max_attempts=max_attempts),
-            timeout=request_timeout,
+        QueryRunner(
+            Transport(
+                http_client,
+                auth=auth,
+                verify=verify,
+                retry=RetryPolicy(max_attempts=max_attempts),
+                timeout=request_timeout,
+            ),
+            heartbeat_interval=heartbeat_interval,
         ),
         legacy_primitive_types=legacy_primitive_types,
         isolation_level=isolation_level,
