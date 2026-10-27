@@ -16,8 +16,9 @@ import httpx2
 
 from asynctrino._core.coordinator import DEFAULT_SOURCE, ClientSession, Coordinator, HttpScheme
 from asynctrino._core.query import Query
+from asynctrino._core.retry import DEFAULT_MAX_ATTEMPTS, RetryPolicy
 from asynctrino._core.status import Column, Row
-from asynctrino._http import Transport, fetch_more, submit
+from asynctrino._http import DEFAULT_REQUEST_TIMEOUT, Transport, fetch_more, submit
 from asynctrino.exceptions import (
     DatabaseError,
     DataError,
@@ -251,6 +252,8 @@ def connect(  # noqa: PLR0913
     auth: httpx2.Auth | None = None,
     allow_insecure_auth: bool = False,
     verify: bool | ssl.SSLContext = True,
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    request_timeout: float | httpx2.Timeout = DEFAULT_REQUEST_TIMEOUT,
     http_client: httpx2.AsyncClient | None = None,
 ) -> Connection:
     """Create a connection to a Trino Coordinator without doing any I/O.
@@ -272,6 +275,13 @@ def connect(  # noqa: PLR0913
             system's store, ``False`` skips verification, and an ``ssl.SSLContext`` is used as
             is, so it can trust a private CA or present a client certificate. Ignored with
             ``http_client``.
+        max_attempts: How many times each request is attempted, including the first. Requests
+            are retried on HTTP 429, 502, 503 and 504, on an empty 200 response to a statement
+            request, and on connect, read and timeout errors. Waits honour ``Retry-After`` and
+            otherwise back off exponentially with jitter. ``1`` disables retries.
+        request_timeout: Seconds, or an ``httpx2.Timeout`` for separate connect, read, write
+            and pool timeouts, applied to the client asynctrino creates. Ignored when
+            ``http_client`` is given: configure that client's own timeout instead.
         http_client: An ``httpx2.AsyncClient`` to send requests with, keeping its own TLS and
             proxy settings. asynctrino never closes it or changes its defaults. Without one, a
             client is created on the first request, honours the proxy environment variables
@@ -283,6 +293,7 @@ def connect(  # noqa: PLR0913
     Raises:
         TrinoAuthError: ``auth`` is set for an ``http`` Coordinator without
             ``allow_insecure_auth``.
+        ValueError: ``max_attempts`` is less than 1, or ``http_scheme`` is unknown.
     """
     coordinator = Coordinator.resolve(host, port, http_scheme)
     if auth is not None and not coordinator.uses_tls and not allow_insecure_auth:
@@ -290,5 +301,11 @@ def connect(  # noqa: PLR0913
     return Connection(
         coordinator,
         ClientSession(user=user, source=source, catalog=catalog, schema=schema),
-        Transport(http_client, auth=auth, verify=verify),
+        Transport(
+            http_client,
+            auth=auth,
+            verify=verify,
+            retry=RetryPolicy(max_attempts=max_attempts),
+            timeout=request_timeout,
+        ),
     )
