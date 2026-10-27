@@ -3,6 +3,9 @@
 from dataclasses import dataclass
 from typing import Literal
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
+
+import tzlocal
 
 type HttpScheme = Literal["http", "https"]
 
@@ -55,6 +58,7 @@ class ClientSession:
     source: str = DEFAULT_SOURCE
     catalog: str | None = None
     schema: str | None = None
+    timezone: str | None = None
 
     def headers(self) -> dict[str, str]:
         """The ``X-Trino-*`` headers describing this session."""
@@ -63,5 +67,18 @@ class ClientSession:
             "X-Trino-Source": self.source,
             "X-Trino-Catalog": self.catalog,
             "X-Trino-Schema": self.schema,
+            "X-Trino-Time-Zone": self.timezone,
         }
         return {name: value for name, value in values.items() if value is not None}
+
+
+def session_timezone(timezone: str | None) -> str:
+    """The IANA time zone a session runs in: ``timezone`` if given, else the local zone.
+
+    Raises:
+        zoneinfo.ZoneInfoNotFoundError: ``timezone`` is not a known IANA time zone.
+    """
+    if timezone is None:
+        return tzlocal.get_localzone_name()
+    _ = ZoneInfo(timezone)
+    return timezone

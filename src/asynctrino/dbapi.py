@@ -13,7 +13,13 @@ from typing import Final, NamedTuple, Self
 
 import httpx2
 
-from asynctrino._core.coordinator import DEFAULT_SOURCE, ClientSession, Coordinator, HttpScheme
+from asynctrino._core.coordinator import (
+    DEFAULT_SOURCE,
+    ClientSession,
+    Coordinator,
+    HttpScheme,
+    session_timezone,
+)
 from asynctrino._core.query import Query
 from asynctrino._core.status import Column, Row
 from asynctrino._http import Transport, fetch_more, submit
@@ -99,15 +105,34 @@ class Connection:
     """A connection to a Trino Coordinator. Create it with :func:`connect`."""
 
     def __init__(
-        self, coordinator: Coordinator, session: ClientSession, transport: Transport
+        self,
+        coordinator: Coordinator,
+        session: ClientSession,
+        transport: Transport,
+        *,
+        legacy_primitive_types: bool,
     ) -> None:
         self._coordinator = coordinator
         self._session = session
         self._transport = transport
+        self._legacy_primitive_types = legacy_primitive_types
 
-    def cursor(self) -> Cursor:
-        """Return a new cursor. No I/O happens until :meth:`Cursor.execute`."""
-        return Cursor(self, self._coordinator, self._session, self._transport)
+    def cursor(self, *, legacy_primitive_types: bool | None = None) -> Cursor:
+        """Return a new cursor. No I/O happens until :meth:`Cursor.execute`.
+
+        Args:
+            legacy_primitive_types: Override the connection's ``legacy_primitive_types`` for
+                this cursor.
+        """
+        if legacy_primitive_types is None:
+            legacy_primitive_types = self._legacy_primitive_types
+        return Cursor(
+            self,
+            self._coordinator,
+            self._session,
+            self._transport,
+            legacy_primitive_types=legacy_primitive_types,
+        )
 
     async def close(self) -> None:
         """Close the connection and the HTTP client, if asynctrino created it."""
@@ -138,11 +163,14 @@ class Cursor:
         coordinator: Coordinator,
         session: ClientSession,
         transport: Transport,
+        *,
+        legacy_primitive_types: bool,
     ) -> None:
         self._connection = connection
         self._coordinator = coordinator
         self._session = session
         self._transport = transport
+        self._legacy_primitive_types = legacy_primitive_types
         self._query: Query | None = None
         self._closed = False
         self.arraysize = 1
@@ -166,7 +194,12 @@ class Cursor:
         so :attr:`description` is accurate afterwards.
         """
         self._check_open()
-        self._query = Query(operation, self._coordinator, self._session)
+        self._query = Query(
+            operation,
+            self._coordinator,
+            self._session,
+            legacy_primitive_types=self._legacy_primitive_types,
+        )
         await submit(self._query, self._transport)
         return self
 
@@ -239,6 +272,8 @@ def connect(  # noqa: PLR0913
     schema: str | None = None,
     http_scheme: HttpScheme | None = None,
     http_client: httpx2.AsyncClient | None = None,
+    timezone: str | None = None,
+    legacy_primitive_types: bool = False,
 ) -> Connection:
     """Create a connection to a Trino Coordinator without doing any I/O.
 
@@ -254,12 +289,27 @@ def connect(  # noqa: PLR0913
         http_client: An ``httpx2.AsyncClient`` to send requests with. asynctrino never closes
             it or changes its defaults. Without one, a client is created on the first request
             and closed with the connection.
+        timezone: The IANA time zone queries run in, such as ``"Europe/Brussels"``. Defaults to
+            the local time zone.
+        legacy_primitive_types: Return every value as the Coordinator sent it, without mapping
+            it to a Python type. :meth:`Connection.cursor` can override it per cursor.
 
     Returns:
         A new :class:`Connection`.
+
+    Raises:
+        zoneinfo.ZoneInfoNotFoundError: ``timezone`` is not a known IANA time zone.
     """
+    session = ClientSession(
+        user=user,
+        source=source,
+        catalog=catalog,
+        schema=schema,
+        timezone=session_timezone(timezone),
+    )
     return Connection(
         Coordinator.resolve(host, port, http_scheme),
-        ClientSession(user=user, source=source, catalog=catalog, schema=schema),
+        session,
         Transport(http_client),
+        legacy_primitive_types=legacy_primitive_types,
     )

@@ -15,6 +15,7 @@ from asynctrino.exceptions import (
     OperationalError,
     ProgrammingError,
     TrinoConnectionError,
+    TrinoDataError,
     TrinoQueryError,
     Warning,  # noqa: A004
 )
@@ -32,6 +33,7 @@ __all__ = [
     "OperationalError",
     "ProgrammingError",
     "TrinoConnectionError",
+    "TrinoDataError",
     "TrinoQueryError",
     "Warning",
     "__version__",
