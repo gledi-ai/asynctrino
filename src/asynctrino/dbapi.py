@@ -17,6 +17,7 @@ from typing import ClassVar, Final, Literal, NamedTuple, Self, overload, overrid
 import httpx2
 
 from asynctrino._core.coordinator import Coordinator, HttpScheme
+from asynctrino._core.messages import redact
 from asynctrino._core.parameters import execute_immediate
 from asynctrino._core.query import Query, StatsCallback
 from asynctrino._core.retry import DEFAULT_MAX_ATTEMPTS, RetryPolicy
@@ -658,7 +659,8 @@ class Segment:
 
     @override
     def __repr__(self) -> str:
-        return f"Segment(encoding={self.encoding!r}, metadata={self.metadata!r}, uri={self.uri!r})"
+        uri = None if self.uri is None else redact(self.uri)
+        return f"Segment(encoding={self.encoding!r}, metadata={self.metadata!r}, uri={uri!r})"
 
 
 def connect(  # noqa: PLR0913

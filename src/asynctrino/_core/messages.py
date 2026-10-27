@@ -3,6 +3,7 @@
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal
+from urllib.parse import urlsplit, urlunsplit
 
 type Method = Literal["GET", "POST", "DELETE", "HEAD"]
 
@@ -33,3 +34,9 @@ class HttpResponse:
     status_code: int
     content: bytes
     headers: Mapping[str, str] = field(default_factory=dict[str, str])
+
+
+def redact(url: str) -> str:
+    """``url`` without its query and fragment, which may hold credentials such as a signature."""
+    parts = urlsplit(url)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))

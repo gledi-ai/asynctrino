@@ -9,7 +9,7 @@ from asynctrino.auth import BasicAuthentication
 from asynctrino.dbapi import Row, connect
 from asynctrino.exceptions import HttpError, NotSupportedError, TrinoConnectionError
 from tests.unit.coordinator import JSON, FakeCoordinator, column, statement_pages
-from tests.unit.segments import SegmentStorage, inline, spooled_pages
+from tests.unit.segments import SIGNATURE, SegmentStorage, encode, inline, spooled_pages
 
 ENCODINGS = ["json", "json+lz4", "json+zstd"]
 TWO_COLUMNS = [column("n", "integer"), column("s", "varchar")]
@@ -255,12 +255,50 @@ async def test_a_failed_ack_is_logged_and_rows_are_still_returned(
 
     assert await fetch_all(storage) == [[1, "one"], [2, "two"]]
     assert [r.getMessage() for r in caplog.records] == [
-        f"failed to acknowledge Segment {SegmentStorage.ack_uri('a')}: HTTP 500",
+        "failed to acknowledge Segment http://coordinator:8080/v1/spooled/ack/a: HTTP 500",
         (
-            f"failed to acknowledge Segment {SegmentStorage.ack_uri('b')}: failed to reach "
-            f"Segment storage at {SegmentStorage.ack_uri('b')}: ConnectError: refused"
+            "failed to acknowledge Segment http://coordinator:8080/v1/spooled/ack/b: failed to "
+            "reach Segment storage at http://coordinator:8080/v1/spooled/ack/b: "
+            "ConnectError: refused"
         ),
     ]
+
+
+async def test_pre_signed_segment_uris_never_appear_in_errors_or_logs(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    storage = spooled_query(
+        lambda s: [[s.spooled("a", [[1, "one"]]), s.spooled("b", [[2, "two"]], offset=1)]]
+    )
+    uri = SegmentStorage.uri("b")
+    storage.failures[SegmentStorage.ack_uri("a")] = [
+        httpx2.ConnectError(f"refused {SegmentStorage.ack_uri('a')}")
+    ]
+    storage.failures[uri] = [httpx2.ConnectError(f"cannot connect to {uri}")]
+
+    with pytest.raises(TrinoConnectionError) as excinfo:
+        _ = await fetch_all(storage)
+
+    assert "http://storage:9000/segments/b" in str(excinfo.value)
+    logged = [r.getMessage() for r in caplog.records]
+    assert len(logged) == 1
+    for text in [str(excinfo.value), repr(excinfo.value), *logged]:
+        assert SIGNATURE not in text
+
+
+async def test_segment_reprs_hide_pre_signed_uris_and_headers() -> None:
+    storage = spooled_query(
+        lambda s: [[s.spooled("a", [[1, "one"]], headers={"X-Token": [SIGNATURE]})]]
+    )
+    async with storage.client() as client:
+        conn = connect(host="coordinator", encoding="json", http_client=client)
+        cur = conn.cursor(cursor_style="segment")
+        await cur.execute("SELECT n, s FROM t")
+        [segment] = await cur.fetchall()
+
+    assert segment.uri == SegmentStorage.uri("a")
+    assert "http://storage:9000/segments/a" in repr(segment)
+    assert SIGNATURE not in repr(segment)
 
 
 @pytest.mark.parametrize(
@@ -376,7 +414,7 @@ async def test_a_segment_cursor_yields_segments_without_downloading_them() -> No
             "Segment(encoding='json+zstd', metadata=SegmentMetadata(row_offset=1, rows_count=1, "
             f"segment_size={rest[0].metadata.segment_size}, uncompressed_size=None, "
             "expires_at=datetime.datetime(2026, 10, 28, 12, 0)), "
-            f"uri={SegmentStorage.uri('a')!r})"
+            "uri='http://storage:9000/segments/a')"
         )
 
         assert [await s.rows() for s in [first, *rest]] == [
@@ -438,3 +476,60 @@ async def test_a_segment_cursor_rejects_a_direct_protocol_result() -> None:
 
         with pytest.raises(NotSupportedError, match="Direct protocol"):
             await cur.execute("SELECT n, s FROM t")
+
+
+@pytest.mark.parametrize(
+    ("encoding", "match"), [("json+lz4", "cannot decompress"), ("json+zstd", "beyond")]
+)
+async def test_a_segment_decompressing_beyond_its_announced_size_raises(
+    encoding: str, match: str
+) -> None:
+    rows = [[n, "x" * 100] for n in range(1000)]
+    segment = inline(rows, encoding=encoding)
+    cast("JSON", segment["metadata"])["uncompressedSize"] = 1000
+    coordinator = FakeCoordinator(
+        spooled_pages(columns=TWO_COLUMNS, encoding=encoding, pages=[[segment]])
+    )
+    async with coordinator.client() as client:
+        cur = connect(host="coordinator", encoding=encoding, http_client=client).cursor()
+        await cur.execute("SELECT n, s FROM t")
+
+        with pytest.raises(TrinoConnectionError, match=match):
+            _ = await cur.fetchall()
+
+
+@pytest.mark.parametrize(
+    ("cut", "extra", "match"), [(0, b"trailing", "cannot decompress"), (4, b"", "truncated")]
+)
+async def test_a_zstd_segment_with_extra_or_missing_frame_data_raises(
+    cut: int, extra: bytes, match: str
+) -> None:
+    encoded = encode([[1, "one"]], "json+zstd")
+    data = encoded.data[: len(encoded.data) - cut] + extra
+    segment = inline([[1, "one"]], encoding="json+zstd")
+    segment["data"] = base64.b64encode(data).decode()
+    cast("JSON", segment["metadata"])["segmentSize"] = len(data)
+    coordinator = FakeCoordinator(
+        spooled_pages(columns=TWO_COLUMNS, encoding="json+zstd", pages=[[segment]])
+    )
+    async with coordinator.client() as client:
+        cur = connect(host="coordinator", encoding="json+zstd", http_client=client).cursor()
+        await cur.execute("SELECT n, s FROM t")
+
+        with pytest.raises(TrinoConnectionError, match=match):
+            _ = await cur.fetchall()
+
+
+@pytest.mark.parametrize("encoding", ["json+lz4", "json+zstd"])
+async def test_a_segment_announcing_an_excessive_size_is_rejected(encoding: str) -> None:
+    segment = inline([[1, "one"]], encoding=encoding)
+    cast("JSON", segment["metadata"])["uncompressedSize"] = 2**40
+    coordinator = FakeCoordinator(
+        spooled_pages(columns=TWO_COLUMNS, encoding=encoding, pages=[[segment]])
+    )
+    async with coordinator.client() as client:
+        cur = connect(host="coordinator", encoding=encoding, http_client=client).cursor()
+        await cur.execute("SELECT n, s FROM t")
+
+        with pytest.raises(TrinoConnectionError, match="too large"):
+            _ = await cur.fetchall()

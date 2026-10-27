@@ -18,6 +18,9 @@ type Encoding = Literal["json", "json+lz4", "json+zstd"]
 
 ENCODINGS: frozenset[str] = frozenset(get_args(Encoding.__value__))
 
+MAX_UNCOMPRESSED_SIZE = 1 << 30
+"""The largest decompressed Segment accepted, far above Trino's default maximum of 16 MB."""
+
 
 def format_encoding(encoding: str | Sequence[str] | None) -> str | None:
     """The ``X-Trino-Query-Data-Encoding`` value for ``connect(encoding=...)``, if any.
@@ -103,6 +106,9 @@ class InlineSegment:
 class SpooledSegment:
     """A Segment whose data is fetched from ``uri`` and then acknowledged at ``ack_uri``.
 
+    The URIs and headers may be credentials, such as pre-signed URLs, so they stay out of the
+    ``repr``.
+
     Attributes:
         headers: Opaque headers the Coordinator requires on both requests; nothing else,
             credentials included, is ever sent with them.
@@ -110,9 +116,9 @@ class SpooledSegment:
 
     encoding: Encoding
     metadata: SegmentMetadata
-    uri: str
-    ack_uri: str
-    headers: Mapping[str, str] = field(default_factory=dict[str, str])
+    uri: str = field(repr=False)
+    ack_uri: str = field(repr=False)
+    headers: Mapping[str, str] = field(default_factory=dict[str, str], repr=False)
 
     def download_request(self) -> HttpRequest:
         """The request that retrieves the Segment's data."""
@@ -210,13 +216,32 @@ def decode(encoding: Encoding, metadata: SegmentMetadata, data: bytes) -> list[l
 
 
 def _decompress(encoding: Encoding, size: int, data: bytes) -> bytes:
+    if size > MAX_UNCOMPRESSED_SIZE:
+        msg = f"Segment is too large: {size} bytes once decompressed"
+        raise TrinoConnectionError(msg)
     try:
         if encoding == "json+lz4":
             return lz4.block.decompress(data, uncompressed_size=size)
-        return zstd.decompress(data)
+        return _decompress_zstd(size, data)
     except (lz4.block.LZ4BlockError, zstd.ZstdError) as e:
         msg = f"cannot decompress {encoding} Segment data: {e}"
         raise TrinoConnectionError(msg) from e
+
+
+def _decompress_zstd(size: int, data: bytes) -> bytes:
+    """Decompress every frame of ``data``, never producing more than ``size`` + 1 bytes."""
+    decompressed = bytearray()
+    while len(data) > 0:
+        decompressor = zstd.ZstdDecompressor()
+        decompressed += decompressor.decompress(data, max_length=size + 1 - len(decompressed))
+        if len(decompressed) > size:
+            msg = f"Segment data decompresses beyond its announced {size} bytes"
+            raise TrinoConnectionError(msg)
+        if not decompressor.eof:
+            msg = "cannot decompress json+zstd Segment data: the frame is truncated"
+            raise TrinoConnectionError(msg)
+        data = decompressor.unused_data
+    return bytes(decompressed)
 
 
 def _sized(data: bytes, expected: int, what: str) -> bytes:

@@ -12,7 +12,7 @@ from itertools import count
 import httpx2
 import truststore
 
-from asynctrino._core.messages import HttpRequest, HttpResponse
+from asynctrino._core.messages import HttpRequest, HttpResponse, redact
 from asynctrino._core.query import Query
 from asynctrino._core.retry import RetryPolicy
 from asynctrino._core.segments import SpooledSegment
@@ -72,8 +72,10 @@ class Transport:
             await asyncio.sleep(delay)
         if isinstance(outcome, Exception):
             target = "Segment storage" if request.segment else "the Coordinator"
-            msg = f"failed to reach {target} at {request.url}: {type(outcome).__name__}: {outcome}"
-            raise TrinoConnectionError(msg) from outcome
+            url = redact(request.url)
+            reason = str(outcome).replace(request.url, url)
+            msg = f"failed to reach {target} at {url}: {type(outcome).__name__}: {reason}"
+            raise TrinoConnectionError(msg) from None if request.segment else outcome
         return outcome
 
     async def _attempt(self, request: HttpRequest) -> HttpResponse | Exception:
@@ -222,9 +224,11 @@ async def acknowledge_segment(segment: SpooledSegment, transport: Transport) -> 
     try:
         response = await transport.send(segment.ack_request())
     except Error as e:
-        logger.warning("failed to acknowledge Segment %s: %s", segment.ack_uri, e)
+        logger.warning("failed to acknowledge Segment %s: %s", redact(segment.ack_uri), e)
         return
     if not 200 <= response.status_code < 300:  # noqa: PLR2004
         logger.warning(
-            "failed to acknowledge Segment %s: HTTP %d", segment.ack_uri, response.status_code
+            "failed to acknowledge Segment %s: HTTP %d",
+            redact(segment.ack_uri),
+            response.status_code,
         )

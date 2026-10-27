@@ -12,6 +12,7 @@ import lz4.block
 from tests.unit.coordinator import BASE_URL, JSON, FakeCoordinator, statement_pages
 
 STORAGE_URL = "http://storage:9000"
+SIGNATURE = "s3cr3t5ignature"
 
 type Handler = Callable[[httpx2.Request], httpx2.Response]
 
@@ -106,11 +107,12 @@ class SegmentStorage:
 
     @staticmethod
     def uri(name: str) -> str:
-        return f"{STORAGE_URL}/segments/{name}"
+        """A pre-signed URL, whose query string is a credential."""
+        return f"{STORAGE_URL}/segments/{name}?X-Amz-Signature={SIGNATURE}-{name}"
 
     @staticmethod
     def ack_uri(name: str) -> str:
-        return f"{BASE_URL}/v1/spooled/ack/{name}"
+        return f"{BASE_URL}/v1/spooled/ack/{name}?token={SIGNATURE}-ack-{name}"
 
     def handler(self, request: httpx2.Request) -> httpx2.Response:
         self.requests.append(request)
