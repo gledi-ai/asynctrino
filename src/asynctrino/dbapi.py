@@ -9,16 +9,26 @@ Example:
 """
 
 import ssl
+from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from types import TracebackType
-from typing import Final, NamedTuple, Self
+from typing import ClassVar, Final, Literal, NamedTuple, Self, overload, override
 
 import httpx2
 
 from asynctrino._core.coordinator import Coordinator, HttpScheme
+from asynctrino._core.messages import redact
 from asynctrino._core.parameters import execute_immediate
 from asynctrino._core.query import Query, StatsCallback
 from asynctrino._core.retry import DEFAULT_MAX_ATTEMPTS, RetryPolicy
+from asynctrino._core.segments import (
+    Encoding,
+    InlineSegment,
+    SegmentMetadata,
+    SpooledSegment,
+    decode,
+    format_encoding,
+)
 from asynctrino._core.session import (
     DEFAULT_SOURCE,
     ClientSession,
@@ -34,7 +44,13 @@ from asynctrino._core.transaction import (
     IsolationLevel,
     start_transaction,
 )
-from asynctrino._http import DEFAULT_REQUEST_TIMEOUT, QueryRunner, Transport
+from asynctrino._http import (
+    DEFAULT_REQUEST_TIMEOUT,
+    QueryRunner,
+    Transport,
+    acknowledge_segment,
+    segment_data,
+)
 from asynctrino.exceptions import (
     DatabaseError,
     DataError,
@@ -64,6 +80,9 @@ __all__ = [
     "OperationalError",
     "ProgrammingError",
     "Row",
+    "Segment",
+    "SegmentCursor",
+    "SegmentMetadata",
     "Warning",
     "apilevel",
     "connect",
@@ -252,23 +271,54 @@ class Connection:
     def isolation_level(self, level: IsolationLevel) -> None:
         self._executor.change_isolation_level(IsolationLevel(level))
 
+    @overload
     def cursor(
         self,
         *,
+        cursor_style: Literal["row"] = "row",
         stats_callback: StatsCallback | None = None,
         legacy_primitive_types: bool | None = None,
-    ) -> Cursor:
+    ) -> Cursor: ...
+
+    @overload
+    def cursor(
+        self,
+        *,
+        cursor_style: Literal["segment"],
+        stats_callback: StatsCallback | None = None,
+        legacy_primitive_types: bool | None = None,
+    ) -> SegmentCursor: ...
+
+    def cursor(
+        self,
+        *,
+        cursor_style: Literal["row", "segment"] = "row",
+        stats_callback: StatsCallback | None = None,
+        legacy_primitive_types: bool | None = None,
+    ) -> Cursor | SegmentCursor:
         """Return a new cursor. No I/O happens until :meth:`Cursor.execute`.
 
         Args:
+            cursor_style: ``"row"`` for a :class:`Cursor` that fetches rows, or ``"segment"``
+                for a :class:`SegmentCursor` that fetches the Spooling protocol's Segments.
             stats_callback: Called with a copy of the query statistics after every Coordinator
                 response, so progress can be reported while a statement runs.
             legacy_primitive_types: Override the connection's ``legacy_primitive_types`` for
                 this cursor.
+
+        Raises:
+            ValueError: ``cursor_style`` is ``"segment"`` but the connection has no
+                ``encoding``.
         """
         if legacy_primitive_types is None:
             legacy_primitive_types = self._legacy_primitive_types
-        return Cursor(
+        cursor_type = Cursor
+        if cursor_style == "segment":
+            if self._executor.session.current.encoding is None:
+                msg = "cursor_style='segment' needs an encoding set on the connection"
+                raise ValueError(msg)
+            cursor_type = SegmentCursor
+        return cursor_type(
             self, self._executor, stats_callback, legacy_primitive_types=legacy_primitive_types
         )
 
@@ -307,8 +357,8 @@ class Connection:
             await self.close()
 
 
-class Cursor:
-    """Executes statements and fetches their rows. Create it with :meth:`Connection.cursor`.
+class _BaseCursor[T](ABC):
+    """Executes statements and fetches their results as items of type ``T``.
 
     Cursors of one autocommit connection can be used from concurrent tasks, one task per cursor.
     If the task awaiting :meth:`execute` or a fetch is cancelled, for instance by
@@ -316,8 +366,10 @@ class Cursor:
     ``CancelledError`` propagates.
 
     Attributes:
-        arraysize: How many rows :meth:`fetchmany` returns when no size is given.
+        arraysize: How many items :meth:`fetchmany` returns when no size is given.
     """
+
+    _keep_segments: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -433,27 +485,30 @@ class Cursor:
         self._earlier_update_count = earlier
         return self
 
-    async def fetchone(self) -> Row | None:
-        """Return the next row, or ``None`` when no rows are left."""
-        rows = await self.fetchmany(1)
-        return rows[0] if len(rows) > 0 else None
+    async def fetchone(self) -> T | None:
+        """Return the next item, or ``None`` when none are left."""
+        items = await self.fetchmany(1)
+        return items[0] if len(items) > 0 else None
 
-    async def fetchmany(self, size: int | None = None) -> list[Row]:
-        """Return up to ``size`` rows (default :attr:`arraysize`); fewer means none are left."""
+    async def fetchmany(self, size: int | None = None) -> list[T]:
+        """Return up to ``size`` items (default :attr:`arraysize`); fewer means none are left."""
         query = self._executed_query()
         size = self.arraysize if size is None else size
-        rows = query.take_rows(size)
-        while len(rows) < size and await self._executor.fetch_more(query):
-            rows.extend(query.take_rows(size - len(rows)))
-        return rows
+        items = self._take(query, size)
+        while len(items) < size and await self._executor.fetch_more(query):
+            items.extend(self._take(query, size - len(items)))
+        return items
 
-    async def fetchall(self) -> list[Row]:
-        """Return every remaining row."""
+    async def fetchall(self) -> list[T]:
+        """Return every remaining item."""
         query = self._executed_query()
-        rows = query.take_rows()
+        items = self._take(query, None)
         while await self._executor.fetch_more(query):
-            rows.extend(query.take_rows())
-        return rows
+            items.extend(self._take(query, None))
+        return items
+
+    @abstractmethod
+    def _take(self, query: Query, limit: int | None) -> list[T]: ...
 
     async def cancel(self) -> None:
         """Cancel the running statement on the Coordinator; it then returns no more rows.
@@ -480,11 +535,11 @@ class Cursor:
     def __aiter__(self) -> Self:
         return self
 
-    async def __anext__(self) -> Row:
-        row = await self.fetchone()
-        if row is None:
+    async def __anext__(self) -> T:
+        item = await self.fetchone()
+        if item is None:
             raise StopAsyncIteration
-        return row
+        return item
 
     async def __aenter__(self) -> Self:
         return self
@@ -510,6 +565,7 @@ class Cursor:
             self._executor.session,
             self._stats_callback,
             legacy_primitive_types=self._legacy_primitive_types,
+            keep_segments=self._keep_segments,
         )
         self._query = query
         await self._executor.submit(query)
@@ -526,6 +582,108 @@ class Cursor:
             msg = "execute() must be called before fetching rows"
             raise ProgrammingError(msg)
         return self._query
+
+
+class Cursor(_BaseCursor[Row]):
+    """Executes statements and fetches their rows. Create it with :meth:`Connection.cursor`.
+
+    Attributes:
+        arraysize: How many rows :meth:`fetchmany` returns when no size is given.
+    """
+
+    @override
+    def _take(self, query: Query, limit: int | None) -> list[Row]:
+        return query.take_rows(limit)
+
+
+class SegmentCursor(_BaseCursor["Segment"]):
+    """Fetches a Spooling-protocol result as :class:`Segment` objects instead of rows.
+
+    Create it with ``Connection.cursor(cursor_style="segment")`` on a connection with an
+    ``encoding``. Segments are neither downloaded nor acknowledged until asked to.
+
+    Attributes:
+        arraysize: How many Segments :meth:`fetchmany` returns when no size is given.
+    """
+
+    _keep_segments: ClassVar[bool] = True
+
+    @override
+    def _take(self, query: Query, limit: int | None) -> list[Segment]:
+        transport = self._executor.runner.transport
+        return [Segment(segment, query, transport) for segment in query.take_segments(limit)]
+
+
+class Segment:
+    """One Segment of a Spooling-protocol result, as fetched by a :class:`SegmentCursor`.
+
+    Inline Segments carry their data; spooled ones are downloaded from Segment storage with
+    only their own :attr:`headers`, never with credentials or ``X-Trino-*`` headers.
+    """
+
+    def __init__(
+        self, segment: InlineSegment | SpooledSegment, query: Query, transport: Transport
+    ) -> None:
+        self._segment = segment
+        self._query = query
+        self._transport = transport
+
+    @property
+    def encoding(self) -> Encoding:
+        """How the Segment's data is encoded: ``json``, ``json+lz4`` or ``json+zstd``."""
+        return self._segment.encoding
+
+    @property
+    def metadata(self) -> SegmentMetadata:
+        """The Segment's position, row count and sizes."""
+        return self._segment.metadata
+
+    @property
+    def uri(self) -> str | None:
+        """Where a spooled Segment's data is downloaded from; ``None`` for an inline one."""
+        return self._segment.uri if isinstance(self._segment, SpooledSegment) else None
+
+    @property
+    def ack_uri(self) -> str | None:
+        """Where a spooled Segment is acknowledged; ``None`` for an inline one."""
+        return self._segment.ack_uri if isinstance(self._segment, SpooledSegment) else None
+
+    @property
+    def headers(self) -> Mapping[str, str]:
+        """The opaque headers sent to download and acknowledge a spooled Segment."""
+        return self._segment.headers if isinstance(self._segment, SpooledSegment) else {}
+
+    async def data(self) -> bytes:
+        """The Segment's data, still encoded, downloading it if it is spooled.
+
+        Raises:
+            HttpError: Segment storage answered with an error status.
+            TrinoConnectionError: Segment storage could not be reached.
+        """
+        if isinstance(self._segment, InlineSegment):
+            return self._segment.data
+        return await segment_data(self._segment, self._transport)
+
+    async def rows(self) -> list[Row]:
+        """The Segment's rows, decoded and mapped like a :class:`Cursor`'s.
+
+        Raises:
+            HttpError: Segment storage answered with an error status.
+            TrinoConnectionError: Segment storage could not be reached, or the data can't be
+                decoded.
+        """
+        rows = decode(self.encoding, self.metadata, await self.data())
+        return self._query.map_rows(rows)
+
+    async def acknowledge(self) -> None:
+        """Tell the server a spooled Segment can be deleted; a failure is only logged."""
+        if isinstance(self._segment, SpooledSegment):
+            await acknowledge_segment(self._segment, self._transport)
+
+    @override
+    def __repr__(self) -> str:
+        uri = None if self.uri is None else redact(self.uri)
+        return f"Segment(encoding={self.encoding!r}, metadata={self.metadata!r}, uri={uri!r})"
 
 
 def connect(  # noqa: PLR0913
@@ -551,6 +709,7 @@ def connect(  # noqa: PLR0913
     request_timeout: float | httpx2.Timeout = DEFAULT_REQUEST_TIMEOUT,
     http_client: httpx2.AsyncClient | None = None,
     legacy_primitive_types: bool = False,
+    encoding: str | Sequence[str] | None = None,
 ) -> Connection:
     """Create a connection to a Trino Coordinator without doing any I/O.
 
@@ -597,6 +756,10 @@ def connect(  # noqa: PLR0913
             (``HTTPS_PROXY``, ``NO_PROXY``, ...), and is closed with the connection.
         legacy_primitive_types: Return every value as the Coordinator sent it, without mapping
             it to a Python type. :meth:`Connection.cursor` can override it per cursor.
+        encoding: Opt into the Spooling protocol with these Segment encodings, in order of
+            preference: ``"json+zstd"``, ``"json+lz4"`` or ``"json"``, as a list or a
+            comma-separated string. Without it, results use the Direct protocol, as they do
+            when the server can't spool.
 
     Returns:
         A new :class:`Connection`.
@@ -606,7 +769,8 @@ def connect(  # noqa: PLR0913
             ``allow_insecure_auth``.
         ValueError: ``max_attempts`` is less than 1, ``http_scheme`` or ``isolation_level`` is
             unknown, an ``extra_credential`` key is not ASCII or contains whitespace or ``=``,
-            or ``http_headers`` would override a header asynctrino sends itself.
+            ``http_headers`` would override a header asynctrino sends itself, or ``encoding``
+            names an unsupported encoding.
         zoneinfo.ZoneInfoNotFoundError: ``timezone`` is not a known IANA time zone.
     """
     coordinator = Coordinator.resolve(host, port, http_scheme)
@@ -628,6 +792,7 @@ def connect(  # noqa: PLR0913
             timezone=session_timezone(timezone),
             http_headers={} if http_headers is None else dict(http_headers),
             transaction_id=None if autocommit else NO_TRANSACTION,
+            encoding=format_encoding(encoding),
         ),
         Transport(
             http_client,

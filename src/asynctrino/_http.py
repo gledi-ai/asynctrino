@@ -12,11 +12,12 @@ from itertools import count
 import httpx2
 import truststore
 
-from asynctrino._core.messages import HttpRequest, HttpResponse
+from asynctrino._core.messages import HttpRequest, HttpResponse, redact
 from asynctrino._core.query import Query
 from asynctrino._core.retry import RetryPolicy
+from asynctrino._core.segments import SpooledSegment
 from asynctrino._core.status import check_status
-from asynctrino.exceptions import TrinoConnectionError
+from asynctrino.exceptions import Error, TrinoConnectionError
 
 DEFAULT_REQUEST_TIMEOUT = 30.0
 CANCEL_TIMEOUT = 5.0
@@ -70,11 +71,11 @@ class Transport:
                 break
             await asyncio.sleep(delay)
         if isinstance(outcome, Exception):
-            msg = (
-                f"failed to reach the Coordinator at {request.url}: "
-                f"{type(outcome).__name__}: {outcome}"
-            )
-            raise TrinoConnectionError(msg) from outcome
+            target = "Segment storage" if request.segment else "the Coordinator"
+            url = redact(request.url)
+            reason = str(outcome).replace(request.url, url)
+            msg = f"failed to reach {target} at {url}: {type(outcome).__name__}: {reason}"
+            raise TrinoConnectionError(msg) from None if request.segment else outcome
         return outcome
 
     async def _attempt(self, request: HttpRequest) -> HttpResponse | Exception:
@@ -83,13 +84,20 @@ class Transport:
                 verify=_ssl_context(verify=self._verify), timeout=self._timeout
             )
         try:
-            response = await self._client.request(
-                request.method,
-                request.url,
-                headers=request.headers,
-                content=request.content,
-                auth=httpx2.USE_CLIENT_DEFAULT if self._auth is None else self._auth,
-            )
+            if request.segment:
+                # send() skips the client's default headers and cookies, which build_request merges.
+                response = await self._client.send(
+                    httpx2.Request(request.method, request.url, headers=request.headers),
+                    auth=None,
+                )
+            else:
+                response = await self._client.request(
+                    request.method,
+                    request.url,
+                    headers=request.headers,
+                    content=request.content,
+                    auth=httpx2.USE_CLIENT_DEFAULT if self._auth is None else self._auth,
+                )
         except (httpx2.HTTPError, httpx2.InvalidURL) as e:
             return e
         return HttpResponse(response.status_code, response.content, response.headers)
@@ -162,6 +170,10 @@ class QueryRunner:
         await asyncio.gather(*(self.abandon(query) for query in list(self._running)))
 
     async def _fetch(self, query: Query) -> bool:
+        segment = query.pending_segment
+        if segment is not None:
+            await download_segment(query, segment, self.transport)
+            return True
         request = query.advance()
         if request is None:
             return False
@@ -187,3 +199,36 @@ async def _delete_quietly(query: Query, request: HttpRequest, transport: Transpo
             check_status(await transport.send(request))
     except Exception:
         logger.warning("failed to cancel query %s", query.query_id, exc_info=True)
+
+
+async def download_segment(query: Query, segment: SpooledSegment, transport: Transport) -> None:
+    """Download and decode ``segment`` into ``query``'s rows, then acknowledge it."""
+    query.receive_segment(await segment_data(segment, transport))
+    await acknowledge_segment(segment, transport)
+
+
+async def segment_data(segment: SpooledSegment, transport: Transport) -> bytes:
+    """Download ``segment``'s data, still encoded.
+
+    Raises:
+        HttpError: Segment storage answered with an error status.
+        TrinoConnectionError: Segment storage could not be reached.
+    """
+    response = await transport.send(segment.download_request())
+    check_status(response)
+    return response.content
+
+
+async def acknowledge_segment(segment: SpooledSegment, transport: Transport) -> None:
+    """Tell the server ``segment`` can be deleted; a failure is only logged."""
+    try:
+        response = await transport.send(segment.ack_request())
+    except Error as e:
+        logger.warning("failed to acknowledge Segment %s: %s", redact(segment.ack_uri), e)
+        return
+    if not 200 <= response.status_code < 300:  # noqa: PLR2004
+        logger.warning(
+            "failed to acknowledge Segment %s: HTTP %d",
+            redact(segment.ack_uri),
+            response.status_code,
+        )

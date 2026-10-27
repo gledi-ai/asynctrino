@@ -93,6 +93,7 @@ class ClientSession:
     http_headers: Mapping[str, str] = field(default_factory=dict[str, str])
     transaction_id: str | None = None
     """``None`` in autocommit; otherwise the open transaction's id, or ``"NONE"`` between them."""
+    encoding: str | None = None
 
     def __post_init__(self) -> None:
         for name in self.http_headers:
@@ -124,6 +125,7 @@ class ClientSession:
             ),
             "X-Trino-Time-Zone": self.timezone,
             "X-Trino-Client-Capabilities": CLIENT_CAPABILITIES,
+            "X-Trino-Query-Data-Encoding": self.encoding,
             "X-Trino-Transaction-Id": self.transaction_id,
         }
         present = {name: value for name, value in values.items() if value is not None}

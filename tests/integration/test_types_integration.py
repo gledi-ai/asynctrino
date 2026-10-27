@@ -12,6 +12,13 @@ from asynctrino.dbapi import Connection, Cursor, Row, connect
 from asynctrino.exceptions import Error, TrinoDataError
 from tests.integration.trino import trino_version
 
+
+@pytest.fixture
+def conn(encoded_conn: Connection) -> Connection:
+    """Run every test here over the Direct protocol and the Spooling protocol's encodings."""
+    return encoded_conn
+
+
 type Field = tuple[str, object]
 
 

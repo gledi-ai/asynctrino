@@ -73,7 +73,7 @@ class TrinoAuthError(OperationalError):
 
 
 class TrinoConnectionError(OperationalError):
-    """The Coordinator could not be reached or answered with an unexpected HTTP response."""
+    """The Coordinator or Segment storage could not be reached, or answered unexpectedly."""
 
 
 class TrinoDataError(NotSupportedError):
