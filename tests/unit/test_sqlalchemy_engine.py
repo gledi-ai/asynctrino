@@ -410,15 +410,19 @@ async def test_a_cached_statement_renders_each_executions_own_values() -> None:
     assert second.endswith("USING 5")
 
 
-@pytest.mark.parametrize("type_", [TIME, TIMESTAMP])
-async def test_a_cached_cast_tells_time_zones_apart(type_: type[TIME | TIMESTAMP]) -> None:
+async def test_a_cached_cast_tells_time_zones_apart() -> None:
     coordinator = CatalogCoordinator()
     t = Table("t", MetaData(), Column("x", Integer))
 
     async with connection_to(coordinator) as conn:
-        _ = await conn.execute(select(sql_cast(t.c.x, type_(3))))
-        _ = await conn.execute(select(sql_cast(t.c.x, type_(3, timezone=True))))
+        _ = await conn.execute(select(sql_cast(t.c.x, TIME(3))))
+        _ = await conn.execute(select(sql_cast(t.c.x, TIME(3, timezone=True))))
+        _ = await conn.execute(select(sql_cast(t.c.x, TIMESTAMP(3))))
+        _ = await conn.execute(select(sql_cast(t.c.x, TIMESTAMP(3, timezone=True))))
 
-    local, zoned = coordinator.statements()
-    assert f"{type_.__name__}(3))" in local
-    assert f"{type_.__name__}(3) WITH TIME ZONE)" in zoned
+    assert [sql.split(" AS ")[1] for sql in coordinator.statements()] == [
+        "TIME(3))",
+        "TIME(3) WITH TIME ZONE)",
+        "TIMESTAMP(3))",
+        "TIMESTAMP(3) WITH TIME ZONE)",
+    ]
