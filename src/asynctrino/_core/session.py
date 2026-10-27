@@ -2,7 +2,7 @@
 
 import re
 import warnings
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from urllib.parse import quote, quote_plus, unquote_plus
 from zoneinfo import ZoneInfo
@@ -108,7 +108,7 @@ class ClientSession:
         present = {name: value for name, value in values.items() if value is not None}
         return {**present, **self.http_headers}
 
-    def updated(self, response_headers: Sequence[tuple[str, str]]) -> ClientSession:
+    def updated(self, response_headers: Mapping[str, str]) -> ClientSession:
         """The session after applying a response's ``X-Trino-Set-*`` and ``Clear-*`` headers."""
         updates = _ResponseHeaders(response_headers)
         cleared = set(updates.listed("x-trino-clear-session"))
@@ -130,10 +130,10 @@ class ClientSession:
 
 @dataclass(frozen=True, slots=True)
 class _ResponseHeaders:
-    items: Sequence[tuple[str, str]]
+    items: Mapping[str, str]
 
     def values(self, name: str) -> list[str]:
-        return [value for key, value in self.items if key.lower() == name]
+        return [value for key, value in self.items.items() if key.lower() == name]
 
     def last(self, name: str, default: str | None) -> str | None:
         values = self.values(name)
@@ -162,6 +162,6 @@ class SessionState:
     def __init__(self, session: ClientSession) -> None:
         self.current = session
 
-    def apply(self, response_headers: Sequence[tuple[str, str]]) -> None:
+    def apply(self, response_headers: Mapping[str, str]) -> None:
         """Apply a Coordinator response's session updates."""
         self.current = self.current.updated(response_headers)

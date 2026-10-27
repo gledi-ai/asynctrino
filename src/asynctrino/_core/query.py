@@ -66,13 +66,14 @@ class Query:
             **self._headers(),
             "Content-Type": "text/plain; charset=utf-8",
         }
-        return HttpRequest("POST", self._coordinator.statement_url, headers, self.sql.encode())
+        url = self._coordinator.statement_url
+        return HttpRequest("POST", url, headers, self.sql.encode(), statement=True)
 
     def advance(self) -> HttpRequest | None:
         """The GET for the next page, or ``None`` once the query has finished."""
         if self._next_uri is None:
             return None
-        return HttpRequest("GET", self._next_uri, self._headers())
+        return HttpRequest("GET", self._next_uri, self._headers(), statement=True)
 
     def receive(self, response: HttpResponse) -> None:
         """Apply a Coordinator response to the query's state and buffer its rows."""

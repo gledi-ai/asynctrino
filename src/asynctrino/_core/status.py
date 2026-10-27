@@ -2,10 +2,22 @@
 
 import json
 from dataclasses import dataclass
+from http import HTTPStatus
 from typing import Any, NotRequired, TypedDict, cast
 
 from asynctrino._core.messages import HttpResponse
-from asynctrino.exceptions import TrinoConnectionError, TrinoQueryError
+from asynctrino.exceptions import (
+    Http502Error,
+    Http503Error,
+    Http504Error,
+    HttpError,
+    TrinoAuthError,
+    TrinoConnectionError,
+    TrinoExternalError,
+    TrinoInternalError,
+    TrinoQueryError,
+    TrinoUserError,
+)
 
 type Row = list[Any]  # pyrefly: ignore[explicit-any]  # row values are dynamic by nature
 
@@ -57,12 +69,17 @@ class QueryStatus:
 def parse_status(response: HttpResponse) -> QueryStatus:
     """Parse a Coordinator response, raising if it reports a failure."""
     if not 200 <= response.status_code < 300:  # noqa: PLR2004
-        body = response.content.decode(errors="replace")
-        msg = f"error {response.status_code}: {body}"
+        raise _http_error(response)
+    if len(response.content.strip()) == 0:
+        msg = f"received an empty response from the Coordinator (status {response.status_code})"
         raise TrinoConnectionError(msg)
-    results = cast("_QueryResults", json.loads(response.content))
+    try:
+        results = cast("_QueryResults", json.loads(response.content))
+    except ValueError as e:
+        msg = f"received invalid JSON from the Coordinator: {e}"
+        raise TrinoConnectionError(msg) from e
     if "error" in results:
-        raise TrinoQueryError(results["error"], results.get("id"))
+        raise _query_error(results["error"], results.get("id"))
     return QueryStatus(
         id=results["id"],
         info_uri=results["infoUri"],
@@ -74,3 +91,26 @@ def parse_status(response: HttpResponse) -> QueryStatus:
         update_type=results.get("updateType"),
         update_count=results.get("updateCount"),
     )
+
+
+def _query_error(error: dict[str, object], query_id: str | None) -> TrinoQueryError:
+    match error.get("errorType"):
+        case "USER_ERROR":
+            return TrinoUserError(error, query_id)
+        case "EXTERNAL":
+            return TrinoExternalError(error, query_id)
+        case "INTERNAL_ERROR":
+            return TrinoInternalError(error, query_id)
+        case _:
+            return TrinoQueryError(error, query_id)
+
+
+_HTTP_ERRORS: dict[int, type[HttpError]] = {502: Http502Error, 503: Http503Error, 504: Http504Error}
+
+
+def _http_error(response: HttpResponse) -> TrinoAuthError | HttpError:
+    body = response.content.decode(errors="replace")
+    if response.status_code == HTTPStatus.UNAUTHORIZED:
+        return TrinoAuthError(f"error {response.status_code}: {body}")
+    error = _HTTP_ERRORS.get(response.status_code, HttpError)
+    return error(response.status_code, body)

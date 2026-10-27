@@ -8,6 +8,7 @@ Example:
     [[1]]
 """
 
+import ssl
 from collections.abc import Mapping, Sequence
 from types import TracebackType
 from typing import Final, NamedTuple, Self
@@ -16,9 +17,10 @@ import httpx2
 
 from asynctrino._core.coordinator import Coordinator, HttpScheme
 from asynctrino._core.query import Query, StatsCallback
+from asynctrino._core.retry import DEFAULT_MAX_ATTEMPTS, RetryPolicy
 from asynctrino._core.session import DEFAULT_SOURCE, ClientSession, SessionState, format_roles
 from asynctrino._core.status import Column, Row
-from asynctrino._http import Transport, fetch_more, submit
+from asynctrino._http import DEFAULT_REQUEST_TIMEOUT, Transport, fetch_more, submit
 from asynctrino.exceptions import (
     DatabaseError,
     DataError,
@@ -29,6 +31,7 @@ from asynctrino.exceptions import (
     NotSupportedError,
     OperationalError,
     ProgrammingError,
+    TrinoAuthError,
     Warning,  # noqa: A004
 )
 
@@ -56,6 +59,14 @@ __all__ = [
 apilevel: Final = "2.0"
 threadsafety: Final = 1
 paramstyle: Final = "qmark"
+
+_INSECURE_AUTH_MESSAGE = (
+    "TLS/SSL is required for authentication. To use HTTPS, specify 'https://' in the host URL "
+    "(which takes precedence over http_scheme), or, if the host URL has no scheme, pass "
+    "http_scheme='https'. If the transport is already encrypted below the application layer "
+    "(e.g. mTLS), pass allow_insecure_auth=True and ensure "
+    "http-server.authentication.allow-insecure-over-http=true is set on the coordinator."
+)
 
 _LENGTH_TYPES = frozenset({"char", "varchar"})
 _PRECISION_TYPES = frozenset(
@@ -290,6 +301,11 @@ def connect(  # noqa: PLR0913
     timezone: str | None = None,
     http_headers: Mapping[str, str] | None = None,
     http_scheme: HttpScheme | None = None,
+    auth: httpx2.Auth | None = None,
+    allow_insecure_auth: bool = False,
+    verify: bool | ssl.SSLContext = True,
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    request_timeout: float | httpx2.Timeout = DEFAULT_REQUEST_TIMEOUT,
     http_client: httpx2.AsyncClient | None = None,
 ) -> Connection:
     """Create a connection to a Trino Coordinator without doing any I/O.
@@ -311,15 +327,42 @@ def connect(  # noqa: PLR0913
         http_headers: Extra HTTP headers for every Coordinator request. They can't replace
             the headers asynctrino sends itself, and never go to Segment storage.
         http_scheme: ``"http"`` or ``"https"``. Defaults to ``https`` when the port is 443.
-        http_client: An ``httpx2.AsyncClient`` to send requests with. asynctrino never closes
-            it or changes its defaults. Without one, a client is created on the first request
-            and closed with the connection.
+        auth: How to authenticate Coordinator requests: a scheme from :mod:`asynctrino.auth`
+            or any ``httpx2.Auth``. It is applied per request, never to Segment storage.
+        allow_insecure_auth: Send ``auth`` credentials over plain ``http``. Only for transports
+            already encrypted below HTTP, such as an mTLS mesh.
+        verify: How to verify the Coordinator's TLS certificate: ``True`` trusts the operating
+            system's store, ``False`` skips verification, and an ``ssl.SSLContext`` is used as
+            is, so it can trust a private CA or present a client certificate. Ignored with
+            ``http_client``.
+        max_attempts: How many times each request is attempted, including the first. Requests
+            are retried on HTTP 429, 502, 503 and 504, on an empty 200 response to a statement
+            request, and on connect, read and timeout errors. Waits honour ``Retry-After`` and
+            otherwise back off exponentially with jitter. ``1`` disables retries.
+        request_timeout: Seconds, or an ``httpx2.Timeout`` for separate connect, read, write
+            and pool timeouts, applied to the client asynctrino creates. Ignored when
+            ``http_client`` is given: configure that client's own timeout instead.
+        http_client: An ``httpx2.AsyncClient`` to send requests with, keeping its own TLS and
+            proxy settings. asynctrino never closes it or changes its defaults. Without one, a
+            client is created on the first request, honours the proxy environment variables
+            (``HTTPS_PROXY``, ``NO_PROXY``, ...), and is closed with the connection.
 
     Returns:
         A new :class:`Connection`.
+
+    Raises:
+        TrinoAuthError: ``auth`` is set for an ``http`` Coordinator without
+            ``allow_insecure_auth``.
+        ValueError: ``max_attempts`` is less than 1, ``http_scheme`` is unknown, an
+            ``extra_credential`` key is not ASCII or contains whitespace or ``=``, or
+            ``http_headers`` would override a header asynctrino sends itself.
+        ZoneInfoNotFoundError: ``timezone`` is not a known IANA time zone.
     """
+    coordinator = Coordinator.resolve(host, port, http_scheme)
+    if auth is not None and not coordinator.uses_tls and not allow_insecure_auth:
+        raise TrinoAuthError(_INSECURE_AUTH_MESSAGE)
     return Connection(
-        Coordinator.resolve(host, port, http_scheme),
+        coordinator,
         ClientSession(
             user=user,
             source=source,
@@ -332,5 +375,11 @@ def connect(  # noqa: PLR0913
             timezone=timezone,
             http_headers={} if http_headers is None else dict(http_headers),
         ),
-        Transport(http_client),
+        Transport(
+            http_client,
+            auth=auth,
+            verify=verify,
+            retry=RetryPolicy(max_attempts=max_attempts),
+            timeout=request_timeout,
+        ),
     )
