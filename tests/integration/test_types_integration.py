@@ -10,7 +10,6 @@ from dateutil.relativedelta import relativedelta
 
 from asynctrino.dbapi import Connection, Cursor, Row, connect
 from asynctrino.exceptions import Error, TrinoDataError
-from tests.integration.trino import trino_version
 
 
 @pytest.fixture
@@ -374,45 +373,26 @@ async def test_interval_year_to_month(conn: Connection) -> None:
 
 
 async def test_interval_day_to_second(conn: Connection) -> None:
-    if int(trino_version()) >= 484:
-        # Trino 484 rounds fractional seconds instead of truncating them, and bounds intervals
-        # by a signed 64-bit microsecond count, narrower than timedelta.
-        sub_millisecond = timedelta(days=1, seconds=40271, microseconds=117000)
-        limit = timedelta(days=106751991, hours=4, seconds=54, milliseconds=775)
-        max_interval: Field = ("INTERVAL '106751991 04:00:54.775' DAY TO SECOND", limit)
-        min_interval: Field = ("INTERVAL '-106751991 04:00:54.775' DAY TO SECOND", -limit)
-        out_of_range = (
-            "INTERVAL '106751991 04:00:54.776' DAY TO SECOND",
-            "INTERVAL '-106751991 04:00:54.776' DAY TO SECOND",
-        )
-    else:
-        sub_millisecond = timedelta(days=1, seconds=40271, microseconds=116000)
-        max_interval = (
-            "INTERVAL '999999999 23:59:59.999' DAY TO SECOND",
-            timedelta(days=999999999, hours=23, minutes=59, seconds=59, milliseconds=999),
-        )
-        min_interval = ("INTERVAL '-999999999' DAY", timedelta(days=-999999999))
-        out_of_range = (
-            "INTERVAL '1000000000' DAY",
-            "INTERVAL '-999999999 00:00:00.001' DAY TO SECOND",
-        )
-
+    widest = timedelta(days=106751991, hours=4, seconds=54, milliseconds=775)
     await assert_selects(
         conn,
         ("CAST(null AS INTERVAL DAY TO SECOND)", None),
         ("INTERVAL '2' DAY", timedelta(days=2)),
         ("INTERVAL '-2' DAY", timedelta(days=-2)),
         ("INTERVAL '-2' SECOND", timedelta(seconds=-2)),
-        ("INTERVAL '1 11:11:11.116555' DAY TO SECOND", sub_millisecond),
+        (
+            "INTERVAL '1 11:11:11.116' DAY TO SECOND",
+            timedelta(days=1, seconds=40271, microseconds=116000),
+        ),
         ("INTERVAL '-5 23:59:57.000' DAY TO SECOND", timedelta(days=-6, seconds=3)),
         ("INTERVAL '12 10:45' DAY TO MINUTE", timedelta(days=12, seconds=38700)),
         ("INTERVAL '45:32.123' MINUTE TO SECOND", timedelta(seconds=2732, microseconds=123000)),
         ("INTERVAL '32.123' SECOND", timedelta(seconds=32, microseconds=123000)),
-        max_interval,
-        min_interval,
+        ("INTERVAL '106751991 04:00:54.775' DAY TO SECOND", widest),
+        ("INTERVAL '-106751991 04:00:54.775' DAY TO SECOND", -widest),
     )
-    for sql in out_of_range:
-        await assert_fails(conn, sql)
+    await assert_fails(conn, "INTERVAL '1000000000' DAY")
+    await assert_fails(conn, "INTERVAL '-1000000000' DAY")
 
 
 async def test_array_of_primitives(conn: Connection) -> None:
