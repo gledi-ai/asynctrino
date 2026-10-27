@@ -7,6 +7,7 @@ from sqlalchemy import (
     ARRAY,
     BINARY,
     BLOB,
+    CLOB,
     NCHAR,
     NVARCHAR,
     REAL,
@@ -34,6 +35,7 @@ from sqlalchemy import (
     try_cast,
     types,
 )
+from sqlalchemy.dialects.oracle import NCLOB
 from sqlalchemy.exc import ArgumentError, CompileError, SAWarning
 from sqlalchemy.schema import CreateTable
 from sqlalchemy.sql import column, table
@@ -323,6 +325,11 @@ def test_composite_types_support_comparison(dialect: TrinoDialect, type_: SQLTyp
     assert str(left.in_([right]).compile(dialect=dialect)) == "l IN (r)"
 
 
+def test_composite_types_map_to_python_types() -> None:
+    assert MAP(String, Integer).python_type is dict
+    assert ROW([("a", Integer)]).python_type is tuple
+
+
 def test_varbinary_create_table(dialect: TrinoDialect) -> None:
     table_with_binary = Table("table_with_binary", MetaData(), Column("data", LargeBinary))
 
@@ -345,6 +352,9 @@ def test_varbinary_create_table(dialect: TrinoDialect) -> None:
         (NCHAR(3), "CHAR(3)"),
         (BLOB(), "VARBINARY"),
         (BINARY(), "VARBINARY"),
+        (types.VARBINARY(16), "VARBINARY"),
+        (CLOB(), "VARCHAR"),
+        (NCLOB(), "VARCHAR"),
         (DateTime(), "TIMESTAMP"),
         (DateTime(timezone=True), "TIMESTAMP WITH TIME ZONE"),
         (TIMESTAMP(6), "TIMESTAMP(6)"),

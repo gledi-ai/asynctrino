@@ -280,9 +280,9 @@ def _precision(options: str | None) -> int | None:
 
 
 def unquote(string: str) -> str:
-    """``string`` without its enclosing double quotes, if it is quoted.
+    r"""``string`` without its enclosing double quotes, if it is quoted.
 
-    Trino escapes a quote in a quoted name as ``""``; ``\\"`` is also accepted.
+    Trino escapes a quote in a quoted name as ``""``; ``\"`` is also accepted.
     """
     if len(string) < 2 or not (string.startswith('"') and string.endswith('"')):  # noqa: PLR2004
         return string
