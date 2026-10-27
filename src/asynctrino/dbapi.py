@@ -15,8 +15,9 @@ import httpx2
 
 from asynctrino._core.coordinator import DEFAULT_SOURCE, ClientSession, Coordinator, HttpScheme
 from asynctrino._core.query import Query
+from asynctrino._core.retry import DEFAULT_MAX_ATTEMPTS, RetryPolicy
 from asynctrino._core.status import Column, Row
-from asynctrino._http import Transport, fetch_more, submit
+from asynctrino._http import DEFAULT_REQUEST_TIMEOUT, Transport, fetch_more, submit
 from asynctrino.exceptions import (
     DatabaseError,
     DataError,
@@ -238,6 +239,8 @@ def connect(  # noqa: PLR0913
     catalog: str | None = None,
     schema: str | None = None,
     http_scheme: HttpScheme | None = None,
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    request_timeout: float | httpx2.Timeout = DEFAULT_REQUEST_TIMEOUT,
     http_client: httpx2.AsyncClient | None = None,
 ) -> Connection:
     """Create a connection to a Trino Coordinator without doing any I/O.
@@ -251,15 +254,27 @@ def connect(  # noqa: PLR0913
         catalog: The default catalog.
         schema: The default schema.
         http_scheme: ``"http"`` or ``"https"``. Defaults to ``https`` when the port is 443.
+        max_attempts: How many times each request is attempted, including the first. Requests
+            are retried on HTTP 429, 502, 503 and 504, on an empty 200 response to a statement
+            request, and on connect, read and timeout errors. Waits honour ``Retry-After`` and
+            otherwise back off exponentially with jitter. ``1`` disables retries.
+        request_timeout: Seconds, or an ``httpx2.Timeout`` for separate connect, read, write
+            and pool timeouts, applied to the client asynctrino creates. Ignored when
+            ``http_client`` is given: configure that client's own timeout instead.
         http_client: An ``httpx2.AsyncClient`` to send requests with. asynctrino never closes
             it or changes its defaults. Without one, a client is created on the first request
             and closed with the connection.
 
     Returns:
         A new :class:`Connection`.
+
+    Raises:
+        ValueError: ``max_attempts`` is less than 1, or ``http_scheme`` is unknown.
     """
     return Connection(
         Coordinator.resolve(host, port, http_scheme),
         ClientSession(user=user, source=source, catalog=catalog, schema=schema),
-        Transport(http_client),
+        Transport(
+            http_client, retry=RetryPolicy(max_attempts=max_attempts), timeout=request_timeout
+        ),
     )
