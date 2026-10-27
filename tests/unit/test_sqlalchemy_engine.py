@@ -11,6 +11,7 @@ from sqlalchemy import exc, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from asynctrino.auth import BasicAuthentication
+from asynctrino.dbapi import Connection
 from asynctrino.sqlalchemy import URL
 from tests.unit.coordinator import (
     FakeCoordinator,
@@ -76,6 +77,13 @@ async def test_text_query_runs_through_the_async_engine() -> None:
     assert post.headers["X-Trino-User"] == "alice"
     assert post.headers["X-Trino-Catalog"] == "tpch"
     assert post.headers["X-Trino-Schema"] == "tiny"
+
+
+async def test_raw_connection_exposes_the_asynctrino_connection() -> None:
+    async with connection_to(one_row_coordinator()) as conn:
+        raw = await conn.get_raw_connection()
+
+        assert isinstance(raw.driver_connection, Connection)
 
 
 def test_dbapi_version_is_the_installed_asynctrino_release() -> None:

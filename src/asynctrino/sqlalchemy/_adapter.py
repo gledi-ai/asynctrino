@@ -1,7 +1,6 @@
 """asynctrino adapted to SQLAlchemy's synchronous DB-API interface through 2.1's async adapters."""
 
 from collections.abc import Awaitable, Callable
-from types import ModuleType
 from typing import Any, cast, override
 
 from sqlalchemy.connectors.asyncio import (
@@ -52,23 +51,25 @@ class AsyncAdaptConnection(AsyncAdapt_terminate, AsyncAdapt_dbapi_connection):
     _ss_cursor_cls = AsyncAdaptServerSideCursor
 
     @property
-    def _trino(self) -> Connection:
+    @override
+    def driver_connection(self) -> Connection:
+        """The adapted asynctrino connection."""
         return cast("Connection", self._connection)
 
     @property
     def isolation_level(self) -> IsolationLevel:
         """The isolation level of the adapted connection."""
-        return self._trino.isolation_level
+        return self.driver_connection.isolation_level
 
     def set_isolation_level(self, level: IsolationLevel) -> None:
         """Roll back any open transaction, then run the next statements at ``level``."""
         self.rollback()
-        self._trino.isolation_level = level
+        self.driver_connection.isolation_level = level
 
     @override
     async def _terminate_graceful_close(self) -> None:
         """Cancel the connection's unfinished queries and close its HTTP client."""
-        await self._trino.close()
+        await self.driver_connection.close()
 
     @override
     def _terminate_force_close(self) -> None:
@@ -82,11 +83,11 @@ class AsyncAdaptConnection(AsyncAdapt_terminate, AsyncAdapt_dbapi_connection):
 class AsyncAdaptDBAPI(AsyncAdapt_dbapi_module):
     """The :mod:`asynctrino.dbapi` module as SQLAlchemy's synchronous dialect code expects it."""
 
-    def __init__(self, driver: ModuleType = dbapi) -> None:
-        super().__init__(driver)
+    def __init__(self) -> None:
+        super().__init__(dbapi)
         self.paramstyle = dbapi.paramstyle
         for name in _EXCEPTIONS:
-            setattr(self, name, getattr(driver, name))
+            setattr(self, name, getattr(dbapi, name))
 
     def connect(self, **kwargs: Any) -> AsyncAdaptConnection:  # noqa: ANN401  # pyrefly: ignore[explicit-any]
         """Create an asynctrino connection; ``async_creator_fn`` replaces :func:`connect`."""

@@ -19,7 +19,7 @@ from sqlalchemy.util import VersionInfo, parse_version_string
 
 import asynctrino
 from asynctrino.auth import BasicAuthentication, JWTAuthentication
-from asynctrino.dbapi import IsolationLevel
+from asynctrino.dbapi import Connection, IsolationLevel
 from asynctrino.exceptions import TrinoConnectionError
 from asynctrino.sqlalchemy._adapter import AsyncAdaptConnection, AsyncAdaptDBAPI
 from asynctrino.sqlalchemy._url import DEFAULT_SOURCE
@@ -55,6 +55,19 @@ class TrinoDialect(DefaultDialect):
     has_terminate = True
     execution_ctx_cls = TrinoExecutionContext
 
+    supports_native_enum = False
+    supports_native_boolean = True
+    supports_native_decimal = True
+    supports_sequences = False
+    supports_comments = True
+    inline_comments = True
+    supports_default_values = False
+    supports_alter = True
+    supports_empty_insert = False
+    supports_multivalues_insert = True
+    postfetch_lastrowid = False
+    cte_follows_insert = True
+
     @override
     @classmethod
     def import_dbapi(cls) -> DBAPIModule:
@@ -63,6 +76,10 @@ class TrinoDialect(DefaultDialect):
     @override
     def retrieve_dbapi_version(self, dbapi: DBAPIModule) -> VersionInfo:
         return parse_version_string(asynctrino.__version__)
+
+    @override
+    def get_driver_connection(self, connection: DBAPIConnection) -> Connection:
+        return _adapted(connection).driver_connection
 
     @override
     def do_terminate(self, dbapi_connection: DBAPIConnection) -> None:
