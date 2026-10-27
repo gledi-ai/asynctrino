@@ -59,7 +59,8 @@ def test(s: nox.Session) -> None:
     )
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary is not None:
-        _ = s.run("bash", "-c", f'coverage report --format=markdown >> "{summary}"', external=True)
+        report = f'coverage report --format=markdown --fail-under=0 >> "{summary}"'
+        _ = s.run("bash", "-c", report, external=True)
 
 
 @nox.session(python=PYTHONS[0], venv_backend="uv")
