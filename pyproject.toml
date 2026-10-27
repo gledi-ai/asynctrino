@@ -22,7 +22,7 @@ classifiers = [
   "Topic :: Database :: Front-Ends",
   "Typing :: Typed",
 ]
-dependencies = ["httpx2>=2.15", "python-dateutil>=2.9", "tzlocal>=5.3"]
+dependencies = ["httpx2>=2.15", "python-dateutil>=2.9", "truststore>=0.10", "tzlocal>=5.3"]
 
 [project.urls]
 Homepage = "https://github.com/gledi-ai/asynctrino"
@@ -41,6 +41,7 @@ dev = [
   "pytest-xdist>=3.8",
   "ruff>=0.14",
   "testcontainers>=4.13",
+  "trustme>=1.2",
   "types-python-dateutil>=2.9",
 ]
 
