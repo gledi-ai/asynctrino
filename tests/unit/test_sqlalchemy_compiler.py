@@ -151,6 +151,24 @@ def test_create_table_with_table_properties(dialect: TrinoDialect) -> None:
     )
 
 
+def test_create_table_renders_table_and_column_comments_inline(dialect: TrinoDialect) -> None:
+    events = Table(
+        "events",
+        MetaData(),
+        Column("id", Integer, nullable=False, comment="the event's id"),
+        Column("region", String),
+        comment="page events",
+        trino_format="ORC",
+    )
+
+    query = CreateTable(events).compile(dialect=dialect)
+
+    assert str(query) == (
+        "\nCREATE TABLE events (\n\tid INTEGER NOT NULL COMMENT 'the event''s id', "
+        "\n\tregion VARCHAR\n)\nCOMMENT 'page events'\nWITH (format = 'ORC')\n\n"
+    )
+
+
 def test_create_table_as_with_table_properties(dialect: TrinoDialect) -> None:
     statement = CreateTableAs(
         select(table_without_catalog.c.id).where(table_without_catalog.c.id > 1),

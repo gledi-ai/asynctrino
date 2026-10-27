@@ -14,6 +14,7 @@ from sqlalchemy.sql.elements import BinaryExpression, FrameClause, TryCast
 from sqlalchemy.sql.functions import Function, ReturnTypeFromArgs
 from sqlalchemy.sql.operators import OperatorType
 from sqlalchemy.sql.schema import (
+    Column,
     ForeignKeyConstraint,
     PrimaryKeyConstraint,
     Table,
@@ -254,9 +255,22 @@ class TrinoDDLCompiler(compiler.DDLCompiler):
     """
 
     @override
+    def get_column_specification(self, column: Column[object], **kwargs: object) -> str:
+        specification = super().get_column_specification(column, **kwargs)
+        if column.comment is None:
+            return specification
+        return f"{specification} COMMENT {self._string_literal(column.comment)}"
+
+    @override
     def post_create_table(self, table: Table) -> str:
+        comment = (
+            "" if table.comment is None else f"\nCOMMENT {self._string_literal(table.comment)}"
+        )
         properties = self._table_properties(table)
-        return "" if properties == "" else f"\nWITH ({properties})"
+        return comment if properties == "" else f"{comment}\nWITH ({properties})"
+
+    def _string_literal(self, value: str) -> str:
+        return self.sql_compiler.render_literal_value(value, sqltypes.String())
 
     @override
     def create_table_select_suffixes(
