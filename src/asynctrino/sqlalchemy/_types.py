@@ -279,11 +279,14 @@ def _precision(options: str | None) -> int | None:
     return None if options is None else int(options)
 
 
-def unquote(string: str, quote: str = '"', escape: str = "\\") -> str:
-    """``string`` without its enclosing quotes and their escapes, if it is quoted."""
-    if len(string) < 2 or not (string.startswith(quote) and string.endswith(quote)):  # noqa: PLR2004
+def unquote(string: str) -> str:
+    """``string`` without its enclosing double quotes, if it is quoted.
+
+    Trino escapes a quote in a quoted name as ``""``; ``\\"`` is also accepted.
+    """
+    if len(string) < 2 or not (string.startswith('"') and string.endswith('"')):  # noqa: PLR2004
         return string
-    return string[1:-1].replace(escape + quote, quote).replace(escape + escape, escape)
+    return string[1:-1].replace('\\"', '"').replace('""', '"')
 
 
 def aware_split(string: str, *, delimiter: str = ",", maxsplit: int = -1) -> Iterator[str]:

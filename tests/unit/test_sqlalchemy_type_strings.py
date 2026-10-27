@@ -155,6 +155,7 @@ rows: dict[str, SQLType] = {
         [("first name", VARCHAR()), ("last name", VARCHAR())]
     ),
     'ROW("First Name" VARCHAR)': ROW([("First Name", VARCHAR())]),
+    'row("a""b" integer, "c,""d" integer)': ROW([('a"b', INTEGER()), ('c,"d', INTEGER())]),
     'row("foo,bar" varchar, "foo(bar)" varchar, "foo\\"bar" varchar)': ROW(
         [("foo,bar", VARCHAR()), ("foo(bar)", VARCHAR()), ('foo"bar', VARCHAR())]
     ),
