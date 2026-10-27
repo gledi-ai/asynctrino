@@ -5,7 +5,7 @@ import pytest
 
 from asynctrino._core.messages import redact
 from asynctrino._core.segments import Encoding, SegmentMetadata, decode
-from asynctrino.exceptions import TrinoConnectionError
+from asynctrino.exceptions import TrinoDataError
 
 COMPRESSED: list[Encoding] = ["json+zstd", "json+lz4"]
 
@@ -17,7 +17,7 @@ def test_negative_uncompressed_size_is_rejected_before_decompressing(encoding: E
         row_offset=0, rows_count=1000, segment_size=len(data), uncompressed_size=-1
     )
 
-    with pytest.raises(TrinoConnectionError, match="-1"):
+    with pytest.raises(TrinoDataError, match="-1"):
         _ = decode(encoding, metadata, data)
 
 

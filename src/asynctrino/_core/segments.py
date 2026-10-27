@@ -12,7 +12,7 @@ from typing import Literal, NotRequired, TypedDict, cast, get_args
 import lz4.block
 
 from asynctrino._core.messages import HttpRequest
-from asynctrino.exceptions import TrinoConnectionError
+from asynctrino.exceptions import TrinoDataError
 
 type Encoding = Literal["json", "json+lz4", "json+zstd"]
 
@@ -140,12 +140,12 @@ def parse_segments(data: SpooledDataJSON) -> list[Segment]:
     """Parse a Spooling-protocol response's ``data`` into Segments.
 
     Raises:
-        TrinoConnectionError: The encoding or a Segment type is unknown.
+        TrinoDataError: The encoding or a Segment type is unknown.
     """
     encoding = data["encoding"]
     if encoding not in ENCODINGS:
         msg = f"the Coordinator answered with unsupported encoding {encoding!r}"
-        raise TrinoConnectionError(msg)
+        raise TrinoDataError(msg)
     return [_segment(cast("Encoding", encoding), segment) for segment in data["segments"]]
 
 
@@ -157,7 +157,7 @@ def _segment(encoding: Encoding, segment: _SegmentJSON) -> Segment:
                 data = base64.b64decode(inline["data"], validate=True)
             except binascii.Error as e:
                 msg = f"inline Segment data is not valid base64: {e}"
-                raise TrinoConnectionError(msg) from e
+                raise TrinoDataError(msg) from e
             return InlineSegment(encoding, _metadata(inline["metadata"]), data)
         case "spooled":
             spooled = cast("_SpooledSegmentJSON", segment)
@@ -170,7 +170,7 @@ def _segment(encoding: Encoding, segment: _SegmentJSON) -> Segment:
             )
         case other:
             msg = f"the Coordinator answered with unsupported Segment type {other!r}"
-            raise TrinoConnectionError(msg)
+            raise TrinoDataError(msg)
 
 
 def _metadata(metadata: _MetadataJSON) -> SegmentMetadata:
@@ -189,7 +189,7 @@ def _headers(headers: Mapping[str, list[str]]) -> dict[str, str]:
     for name, values in headers.items():
         if len(values) != 1:
             msg = f"Segment header {name!r} must have exactly one value, got {values!r}"
-            raise TrinoConnectionError(msg)
+            raise TrinoDataError(msg)
         single[name] = values[0]
     return single
 
@@ -198,7 +198,7 @@ def decode(encoding: Encoding, metadata: SegmentMetadata, data: bytes) -> list[l
     """Decompress and parse a Segment's data into rows.
 
     Raises:
-        TrinoConnectionError: The data doesn't match its metadata or can't be decoded.
+        TrinoDataError: The data doesn't match its metadata or can't be decoded.
     """
     data = _sized(data, metadata.segment_size, "Segment data")
     if metadata.uncompressed_size is not None and encoding != "json":
@@ -208,27 +208,27 @@ def decode(encoding: Encoding, metadata: SegmentMetadata, data: bytes) -> list[l
         rows = cast("list[list[object]]", json.loads(data))
     except ValueError as e:
         msg = f"Segment data at row {metadata.row_offset} is not valid JSON: {e}"
-        raise TrinoConnectionError(msg) from e
+        raise TrinoDataError(msg) from e
     if len(rows) != metadata.rows_count:
         msg = f"expected {metadata.rows_count} rows in the Segment, got {len(rows)}"
-        raise TrinoConnectionError(msg)
+        raise TrinoDataError(msg)
     return rows
 
 
 def _decompress(encoding: Encoding, size: int, data: bytes) -> bytes:
     if size < 0:
         msg = f"Segment announces a negative decompressed size: {size} bytes"
-        raise TrinoConnectionError(msg)
+        raise TrinoDataError(msg)
     if size > MAX_UNCOMPRESSED_SIZE:
         msg = f"Segment is too large: {size} bytes once decompressed"
-        raise TrinoConnectionError(msg)
+        raise TrinoDataError(msg)
     try:
         if encoding == "json+lz4":
             return lz4.block.decompress(data, uncompressed_size=size)
         return _decompress_zstd(size, data)
     except (lz4.block.LZ4BlockError, zstd.ZstdError) as e:
         msg = f"cannot decompress {encoding} Segment data: {e}"
-        raise TrinoConnectionError(msg) from e
+        raise TrinoDataError(msg) from e
 
 
 def _decompress_zstd(size: int, data: bytes) -> bytes:
@@ -239,10 +239,10 @@ def _decompress_zstd(size: int, data: bytes) -> bytes:
         decompressed += decompressor.decompress(data, max_length=size + 1 - len(decompressed))
         if len(decompressed) > size:
             msg = f"Segment data decompresses beyond its announced {size} bytes"
-            raise TrinoConnectionError(msg)
+            raise TrinoDataError(msg)
         if not decompressor.eof:
             msg = "cannot decompress json+zstd Segment data: the frame is truncated"
-            raise TrinoConnectionError(msg)
+            raise TrinoDataError(msg)
         data = decompressor.unused_data
     return bytes(decompressed)
 
@@ -250,5 +250,5 @@ def _decompress_zstd(size: int, data: bytes) -> bytes:
 def _sized(data: bytes, expected: int, what: str) -> bytes:
     if len(data) != expected:
         msg = f"expected {expected} bytes of {what}, got {len(data)}"
-        raise TrinoConnectionError(msg)
+        raise TrinoDataError(msg)
     return data

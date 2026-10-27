@@ -369,7 +369,8 @@ Every failure is an `asynctrino.exceptions` error, part of the PEP 249 hierarchy
 exceptions never escape. Failed queries raise `TrinoUserError`, `TrinoExternalError` or
 `TrinoInternalError`, all `TrinoQueryError`s carrying Trino's `error_code`, `error_name`,
 `error_type`, `error_location` and `query_id`. Transport failures raise `TrinoConnectionError`,
-and error statuses `HttpError`. Requests are retried up to `max_attempts` times on 429, 502,
+and error statuses `HttpError`. Segment data that can't be decoded, and values with no Python
+representation, raise `TrinoDataError`. Requests are retried up to `max_attempts` times on 429, 502,
 503 and 504, on empty responses to statement requests, and on connect, read and timeout errors,
 honouring `Retry-After` and otherwise backing off exponentially with jitter.
 

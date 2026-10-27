@@ -703,8 +703,8 @@ class Segment:
 
         Raises:
             HttpError: Segment storage answered with an error status.
-            TrinoConnectionError: Segment storage could not be reached, or the data can't be
-                decoded.
+            TrinoConnectionError: Segment storage could not be reached.
+            TrinoDataError: The data doesn't match the Segment's metadata or can't be decoded.
         """
         rows = decode(self.encoding, self.metadata, await self.data())
         return self._query.map_rows(rows)

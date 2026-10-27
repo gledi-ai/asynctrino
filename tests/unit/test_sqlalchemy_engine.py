@@ -1,10 +1,11 @@
+import base64
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from decimal import Decimal
 from importlib.metadata import version
 from types import MappingProxyType
-from typing import Protocol
+from typing import Protocol, cast
 
 import httpx2
 import pytest
@@ -13,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_en
 
 from asynctrino.auth import BasicAuthentication
 from asynctrino.dbapi import Connection
+from asynctrino.exceptions import TrinoDataError
 from asynctrino.sqlalchemy import JSON, URL
 from tests.unit.coordinator import (
     BASE_URL,
@@ -21,6 +23,7 @@ from tests.unit.coordinator import (
     column,
     statement_pages,
 )
+from tests.unit.segments import inline, spooled_pages
 
 
 @asynccontextmanager
@@ -349,3 +352,23 @@ async def test_invalidating_a_connection_terminates_its_running_query() -> None:
         assert conn.invalidated
     [delete] = [r for r in coordinator.requests if r.method == "DELETE"]
     assert delete.url.path.startswith("/v1/statement/executing/")
+
+
+async def test_undecodable_segment_data_keeps_the_connection_in_the_pool() -> None:
+    segment = inline([[1]])
+    segment["data"] = base64.b64encode(b"not json").decode()
+    cast("dict[str, object]", segment["metadata"])["segmentSize"] = len(b"not json")
+    coordinator = FakeCoordinator(
+        spooled_pages(columns=[column("_col0", "integer")], encoding="json", pages=[[segment]])
+    )
+    url = URL("coordinator", user="alice", encoding="json")
+    async with (
+        coordinator.client() as client,
+        engine_for(client, url) as engine,
+        engine.connect() as conn,
+    ):
+        with pytest.raises(exc.DBAPIError) as excinfo:
+            _ = await conn.execute(text("SELECT 1"))
+
+        assert isinstance(excinfo.value.orig, TrinoDataError)
+        assert not excinfo.value.connection_invalidated

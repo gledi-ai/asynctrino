@@ -12,6 +12,7 @@ from asynctrino.exceptions import (
     NotSupportedError,
     ProgrammingError,
     TrinoConnectionError,
+    TrinoDataError,
 )
 from tests.unit.coordinator import JSON, FakeCoordinator, column, statement_pages
 from tests.unit.segments import SIGNATURE, SegmentStorage, encode, inline, spooled_pages
@@ -232,7 +233,7 @@ async def test_a_truncated_segment_raises_instead_of_returning_fewer_rows(encodi
     uri = SegmentStorage.uri("a")
     storage.segments[uri] = storage.segments[uri][:-3]
 
-    with pytest.raises(TrinoConnectionError, match="expected"):
+    with pytest.raises(TrinoDataError, match="expected"):
         _ = await fetch_all(storage)
 
 
@@ -245,7 +246,7 @@ async def test_corrupt_compressed_data_raises(encoding: str) -> None:
     uri = SegmentStorage.uri("a")
     storage.segments[uri] = bytes(len(storage.segments[uri]))
 
-    with pytest.raises(TrinoConnectionError, match="decompress"):
+    with pytest.raises(TrinoDataError, match="decompress"):
         _ = await fetch_all(storage)
 
 
@@ -336,7 +337,7 @@ async def test_an_unsupported_spooled_response_raises(data: JSON, match: str) ->
     async with coordinator.client() as client:
         cur = connect(host="coordinator", encoding="json", http_client=client).cursor()
 
-        with pytest.raises(TrinoConnectionError, match=match):
+        with pytest.raises(TrinoDataError, match=match):
             await cur.execute("SELECT n, s FROM t")
 
 
@@ -349,7 +350,7 @@ async def test_segment_data_that_is_not_json_raises() -> None:
         cur = connect(host="coordinator", encoding="json", http_client=client).cursor()
         await cur.execute("SELECT n, s FROM t")
 
-        with pytest.raises(TrinoConnectionError, match="not valid JSON"):
+        with pytest.raises(TrinoDataError, match="not valid JSON"):
             _ = await cur.fetchall()
 
 
@@ -358,7 +359,7 @@ async def test_a_segment_header_with_several_values_raises() -> None:
         lambda s: [[s.spooled("a", [[1, "one"]], headers={"X-Token": ["a", "b"]})]]
     )
 
-    with pytest.raises(TrinoConnectionError, match="X-Token"):
+    with pytest.raises(TrinoDataError, match="X-Token"):
         _ = await fetch_all(storage)
 
 
@@ -369,7 +370,7 @@ async def test_a_segment_with_fewer_rows_than_announced_raises() -> None:
     [segment] = cast("list[JSON]", data["segments"])
     cast("JSON", segment["metadata"])["rowsCount"] = 2
 
-    with pytest.raises(TrinoConnectionError, match="expected 2 rows"):
+    with pytest.raises(TrinoDataError, match="expected 2 rows"):
         _ = await fetch_all(storage)
 
 
@@ -499,7 +500,7 @@ async def test_a_segment_decompressing_beyond_its_announced_size_raises(
         cur = connect(host="coordinator", encoding=encoding, http_client=client).cursor()
         await cur.execute("SELECT n, s FROM t")
 
-        with pytest.raises(TrinoConnectionError, match=match):
+        with pytest.raises(TrinoDataError, match=match):
             _ = await cur.fetchall()
 
 
@@ -521,7 +522,7 @@ async def test_a_zstd_segment_with_extra_or_missing_frame_data_raises(
         cur = connect(host="coordinator", encoding="json+zstd", http_client=client).cursor()
         await cur.execute("SELECT n, s FROM t")
 
-        with pytest.raises(TrinoConnectionError, match=match):
+        with pytest.raises(TrinoDataError, match=match):
             _ = await cur.fetchall()
 
 
@@ -536,7 +537,7 @@ async def test_a_segment_announcing_an_excessive_size_is_rejected(encoding: str)
         cur = connect(host="coordinator", encoding=encoding, http_client=client).cursor()
         await cur.execute("SELECT n, s FROM t")
 
-        with pytest.raises(TrinoConnectionError, match="too large"):
+        with pytest.raises(TrinoDataError, match="too large"):
             _ = await cur.fetchall()
 
 

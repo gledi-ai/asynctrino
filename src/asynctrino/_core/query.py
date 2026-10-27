@@ -161,7 +161,7 @@ class Query:
         """Decode the downloaded data of :attr:`pending_segment` and buffer its rows.
 
         Raises:
-            TrinoConnectionError: The data can't be decoded; the Segment stays pending.
+            TrinoDataError: The data can't be decoded; the Segment stays pending.
         """
         segment = self.pending_segment
         if segment is None:

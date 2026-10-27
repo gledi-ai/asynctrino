@@ -77,9 +77,11 @@ class TrinoConnectionError(OperationalError):
 
 
 class TrinoDataError(NotSupportedError):
-    """A value the Coordinator returned has no Python representation, like ``DATE '-0001-01-01'``.
+    """Result data that can't be turned into rows.
 
-    Pass ``legacy_primitive_types=True`` to receive such values as the Coordinator sent them.
+    Either a Segment's data doesn't match its metadata or can't be decoded, or a value has no
+    Python representation, like ``DATE '-0001-01-01'``. Pass ``legacy_primitive_types=True`` to
+    receive such values as the Coordinator sent them.
     """
 
 
