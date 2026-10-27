@@ -1,15 +1,19 @@
 """The ``asynctrino://`` SQLAlchemy dialect for Trino."""
 
 import json
+import logging
 from collections.abc import Mapping, Sequence
 from typing import cast, override
 
+from sqlalchemy import exc, text
+from sqlalchemy.engine.base import Connection as SQLAlchemyConnection
 from sqlalchemy.engine.default import DefaultDialect, DefaultExecutionContext
 from sqlalchemy.engine.interfaces import (
     ConnectArgsType,
     DBAPIConnection,
     DBAPICursor,
     DBAPIModule,
+    ReflectedIndex,
 )
 from sqlalchemy.engine.interfaces import IsolationLevel as SQLAlchemyIsolationLevel
 from sqlalchemy.engine.url import URL
@@ -45,6 +49,11 @@ _JSON_QUERY_OPTIONS = (
     "allow_insecure_auth",
 )
 
+
+logger = logging.getLogger("asynctrino")
+
+_ICEBERG_PARTITIONS = ("partition", "record_count", "file_count", "total_size", "data")
+_ICEBERG_PARTITION_TYPES = ("row(", "bigint", "bigint", "bigint", "row(")
 
 _TABLE_ARGUMENTS: Mapping[str, None] = {"catalog": None, "*": None}
 _CREATE_TABLE_AS_ARGUMENTS: Mapping[str, None] = {"*": None}
@@ -188,6 +197,89 @@ class TrinoDialect(DefaultDialect):
         if "auth" in kwargs and kwargs.get("allow_insecure_auth") is not True:
             kwargs["http_scheme"] = "https"
         return [], kwargs
+
+    @override
+    def _get_default_schema_name(  # pyrefly: ignore[bad-override]
+        self, connection: SQLAlchemyConnection
+    ) -> str | None:
+        """The connection's current schema, which ``USE`` changes."""
+        return _driver_connection(connection).schema
+
+    @override
+    def has_table(
+        self,
+        connection: SQLAlchemyConnection,
+        table_name: str,
+        schema: str | None = None,
+        **kw: object,
+    ) -> bool:
+        schema = schema or self._get_default_schema_name(connection)
+        if schema is None:
+            return False
+        query = text(
+            'SELECT "table_name" FROM "information_schema"."tables"'
+            ' WHERE "table_schema" = :schema AND "table_name" = :table'
+        )
+        result = connection.execute(query, {"schema": schema, "table": table_name})
+        return result.first() is not None
+
+    @override
+    def get_indexes(
+        self,
+        connection: SQLAlchemyConnection,
+        table_name: str,
+        schema: str | None = None,
+        **kw: object,
+    ) -> list[ReflectedIndex]:
+        """The table's partition columns as one non-unique index named ``partition``, if any.
+
+        Raises:
+            NoSuchTableError: The table doesn't exist.
+        """
+        self._require_table(connection, table_name, schema)
+        try:
+            columns = self._partition_columns(connection, table_name, schema)
+        except exc.DBAPIError as e:
+            logger.debug("No partition columns for %s.%s: %s", schema, table_name, e)
+            return []
+        if len(columns) == 0:
+            return []
+        return [{"name": "partition", "column_names": columns, "unique": False}]
+
+    def _partition_columns(
+        self, connection: SQLAlchemyConnection, table_name: str, schema: str | None
+    ) -> list[str]:
+        schema = schema or self._get_default_schema_name(connection)
+        quote = self.identifier_preparer.quote_identifier
+        partitions = f"{quote(schema or '')}.{quote(f'{table_name}$partitions')}"
+        # Only the columns are read, so the query is cancelled rather than drained.
+        result = connection.execute(
+            text(f"SELECT * FROM {partitions}"),  # noqa: S608
+            execution_options={"stream_results": True},
+        )
+        try:
+            description = result.cursor.description
+        finally:
+            result.close()
+        names = tuple(str(column[0]) for column in description)
+        types = [str(column[1]) for column in description]
+        if names == _ICEBERG_PARTITIONS and all(
+            type_.startswith(prefix)
+            for type_, prefix in zip(types, _ICEBERG_PARTITION_TYPES, strict=True)
+        ):
+            return []
+        return list(names)
+
+    def _require_table(
+        self, connection: SQLAlchemyConnection, table_name: str, schema: str | None
+    ) -> None:
+        if not self.has_table(connection, table_name, schema):
+            msg = f"schema={schema}, table={table_name}"
+            raise exc.NoSuchTableError(msg)
+
+
+def _driver_connection(connection: SQLAlchemyConnection) -> Connection:
+    return cast("Connection", connection.connection.driver_connection)
 
 
 def _adapted(dbapi_connection: DBAPIConnection) -> AsyncAdaptConnection:

@@ -142,3 +142,45 @@ class TransactionCoordinator:
             for r in self.requests
             if r.method == "POST"
         ]
+
+
+@dataclass
+class CatalogCoordinator:
+    """Answers each statement with the pages scripted for the first fragment its SQL contains.
+
+    Statements that match no fragment finish with one ``varchar`` column and no rows. Every
+    ``DELETE`` is accepted with 204.
+    Scripts are built with :func:`statement_pages`; give each one its own ``query_id``.
+    """
+
+    scripts: dict[str, list[JSON]] = field(default_factory=dict[str, list[JSON]])
+    requests: list[httpx2.Request] = field(default_factory=list[httpx2.Request])
+
+    def handler(self, request: httpx2.Request) -> httpx2.Response:
+        """Record ``request`` and answer it from the scripts."""
+        self.requests.append(request)
+        if request.method == "DELETE":
+            return httpx2.Response(204)
+        if request.method == "POST":
+            sql = request.content.decode()
+            for fragment, pages in self.scripts.items():
+                if fragment in sql:
+                    return httpx2.Response(200, json=pages[0])
+            [finished] = statement_pages(
+                columns=[column("_col0", "varchar")], batches=[], queued_pages=0
+            )
+            return httpx2.Response(200, json=finished)
+        for pages in self.scripts.values():
+            for index, page in enumerate(pages, start=1):
+                next_uri = page.get("nextUri")
+                if isinstance(next_uri, str) and httpx2.URL(next_uri) == request.url:
+                    return httpx2.Response(200, json=pages[index])
+        return httpx2.Response(404, text=f"unexpected {request.method} {request.url}")
+
+    def client(self) -> httpx2.AsyncClient:
+        """Return an ``AsyncClient`` routed to this fake Coordinator."""
+        return httpx2.AsyncClient(transport=httpx2.MockTransport(self.handler))
+
+    def statements(self) -> list[str]:
+        """The SQL of every POSTed statement, in order."""
+        return [r.content.decode() for r in self.requests if r.method == "POST"]

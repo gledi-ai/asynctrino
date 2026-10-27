@@ -270,6 +270,16 @@ class Connection:
     def isolation_level(self, level: IsolationLevel) -> None:
         self._executor.change_isolation_level(IsolationLevel(level))
 
+    @property
+    def catalog(self) -> str | None:
+        """The current catalog: the one connected with, or the last one ``USE`` selected."""
+        return self._executor.session.current.catalog
+
+    @property
+    def schema(self) -> str | None:
+        """The current schema: the one connected with, or the last one ``USE`` selected."""
+        return self._executor.session.current.schema
+
     @overload
     def cursor(
         self,
