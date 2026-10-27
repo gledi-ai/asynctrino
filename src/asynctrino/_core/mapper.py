@@ -137,7 +137,7 @@ def _boolean(value: object) -> bool:
         case "false":
             return False
         case _:
-            msg = f"Server sent unexpected value {value} of type {type(value)} for boolean"
+            msg = f"the Coordinator sent unexpected value {value} of type {type(value)} for boolean"
             raise ValueError(msg)
 
 

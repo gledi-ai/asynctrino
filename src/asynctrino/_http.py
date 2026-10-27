@@ -299,7 +299,7 @@ async def segment_data(segment: SpooledSegment, transport: Transport) -> bytes:
 
 
 async def acknowledge_segment(segment: SpooledSegment, transport: Transport) -> None:
-    """Tell the server ``segment`` can be deleted; a failure is only logged."""
+    """Tell the Coordinator ``segment`` can be deleted; a failure is only logged."""
     try:
         response = await transport.send(segment.ack_request())
     except Error as e:

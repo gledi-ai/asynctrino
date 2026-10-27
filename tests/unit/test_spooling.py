@@ -375,7 +375,7 @@ async def test_a_segment_with_fewer_rows_than_announced_raises() -> None:
         _ = await fetch_all(storage)
 
 
-async def test_the_direct_protocol_is_handled_when_the_server_does_not_spool() -> None:
+async def test_the_direct_protocol_is_handled_when_the_coordinator_does_not_spool() -> None:
     coordinator = FakeCoordinator(
         statement_pages(columns=TWO_COLUMNS, batches=[[[1, "one"]], [[2, "two"]]])
     )

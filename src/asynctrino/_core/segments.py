@@ -125,7 +125,7 @@ class SpooledSegment:
         return HttpRequest("GET", self.uri, self.headers, segment=True)
 
     def ack_request(self) -> HttpRequest:
-        """The request that tells the server the Segment can be deleted."""
+        """The request that tells the Coordinator the Segment can be deleted."""
         return HttpRequest("GET", self.ack_uri, self.headers, segment=True)
 
     def decode(self, data: bytes) -> list[list[object]]:

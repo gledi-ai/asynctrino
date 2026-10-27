@@ -318,7 +318,7 @@ async with asynctrino.connect(
     print(len(await cur.fetchall()))
 ```
 
-The server falls back to the Direct protocol when it can't spool, and asynctrino handles both.
+The Coordinator falls back to the Direct protocol when it can't spool, and asynctrino handles both.
 Spooled Segments are downloaded one at a time as you consume rows, with only their own headers:
 no credentials, no `X-Trino-*` headers, and none of your `http_headers`. Each Segment is
 acknowledged after it's decoded. While one downloads, a heartbeat keeps the query alive on the

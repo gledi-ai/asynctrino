@@ -100,7 +100,7 @@ _INSECURE_AUTH_MESSAGE = (
     "(which takes precedence over http_scheme), or, if the host URL has no scheme, pass "
     "http_scheme='https'. If the transport is already encrypted below the application layer "
     "(e.g. mTLS), pass allow_insecure_auth=True and ensure "
-    "http-server.authentication.allow-insecure-over-http=true is set on the coordinator."
+    "http-server.authentication.allow-insecure-over-http=true is set on the Coordinator."
 )
 
 _LENGTH_TYPES = frozenset({"char", "varchar"})
@@ -713,7 +713,7 @@ class Segment:
         return self._query.map_rows(rows)
 
     async def acknowledge(self) -> None:
-        """Tell the server a spooled Segment can be deleted; a failure is only logged."""
+        """Tell the Coordinator a spooled Segment can be deleted; a failure is only logged."""
         if isinstance(self._segment, SpooledSegment):
             await acknowledge_segment(self._segment, self._runner.transport)
 
@@ -797,7 +797,7 @@ def connect(  # noqa: PLR0913
         encoding: Opt into the Spooling protocol with these Segment encodings, in order of
             preference: ``"json+zstd"``, ``"json+lz4"`` or ``"json"``, as a list or a
             comma-separated string. Without it, results use the Direct protocol, as they do
-            when the server can't spool.
+            when the Coordinator can't spool.
         heartbeat_interval: Seconds between the ``HEAD`` requests that keep a query alive on
             the Coordinator while a spooled Segment downloads. ``None`` or ``0`` disables them.
 

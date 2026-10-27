@@ -152,7 +152,7 @@ class Query:
             if not self._legacy_primitive_types:
                 self._row_mapper = RowMapper(status.columns)
         if self._keep_segments and len(status.rows) > 0:
-            msg = "the server answered with the Direct protocol, which has no Segments to yield"
+            msg = "the Coordinator answered with the Direct protocol, which yields no Segments"
             raise NotSupportedError(msg)
         self._rows.extend(self.map_rows(status.rows))
         self._segments.extend(status.segments)
