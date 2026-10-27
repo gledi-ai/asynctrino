@@ -201,6 +201,10 @@ class SessionState:
         """Apply a Coordinator response's session updates."""
         self.current = self.current.updated(response_headers)
 
+    def use_transactions(self, *, enabled: bool) -> None:
+        """Run the next statements in transactions, or in autocommit if not ``enabled``."""
+        self.current = replace(self.current, transaction_id=NO_TRANSACTION if enabled else None)
+
     def end_transaction(self) -> None:
         """Forget the open transaction, so the next statement starts another."""
         self.current = replace(self.current, transaction_id=NO_TRANSACTION)

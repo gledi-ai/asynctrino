@@ -177,6 +177,18 @@ class _Executor:
             self.release(query)
             raise
 
+    def change_isolation_level(self, level: IsolationLevel) -> None:
+        """Run the next statements at ``level``.
+
+        Raises:
+            ProgrammingError: A transaction is open.
+        """
+        if self.session.current.in_transaction:
+            msg = "cannot change the isolation level while a transaction is open"
+            raise ProgrammingError(msg)
+        self.isolation_level = level
+        self.session.use_transactions(enabled=level is not IsolationLevel.AUTOCOMMIT)
+
     def release(self, query: Query | None) -> None:
         """Stop counting ``query`` as the transaction's statement in flight."""
         if query is not None and self._in_flight is query:
@@ -226,8 +238,19 @@ class Connection:
 
     @property
     def isolation_level(self) -> IsolationLevel:
-        """How this connection runs statements: in autocommit, or in transactions at this level."""
+        """How this connection runs statements: in autocommit, or in transactions at this level.
+
+        Setting it applies from the next statement on.
+
+        Raises:
+            ProgrammingError: On setting, while a transaction is open.
+            ValueError: On setting, to an unknown level.
+        """
         return self._executor.isolation_level
+
+    @isolation_level.setter
+    def isolation_level(self, level: IsolationLevel) -> None:
+        self._executor.change_isolation_level(IsolationLevel(level))
 
     def cursor(
         self,

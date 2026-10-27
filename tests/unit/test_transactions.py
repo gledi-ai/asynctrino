@@ -128,6 +128,40 @@ def transactional(client: httpx2.AsyncClient) -> Connection:
     )
 
 
+async def test_changing_the_isolation_level_applies_to_the_next_transaction() -> None:
+    coordinator = TransactionCoordinator()
+    async with coordinator.client() as client:
+        conn = connect(host="coordinator", http_client=client)
+        cur = conn.cursor()
+        await cur.execute("SELECT 1")
+        conn.isolation_level = IsolationLevel.REPEATABLE_READ
+        await cur.execute("SELECT 2")
+        await conn.commit()
+        conn.isolation_level = cast("IsolationLevel", "AUTOCOMMIT")
+        await cur.execute("SELECT 3")
+
+        assert conn.isolation_level is IsolationLevel.AUTOCOMMIT
+    assert coordinator.statements() == [
+        ("SELECT 1", None),
+        ("START TRANSACTION ISOLATION LEVEL REPEATABLE READ", "NONE"),
+        ("SELECT 2", "tx-1"),
+        ("COMMIT", "tx-1"),
+        ("SELECT 3", None),
+    ]
+
+
+async def test_isolation_level_cannot_change_while_a_transaction_is_open() -> None:
+    coordinator = TransactionCoordinator()
+    async with coordinator.client() as client:
+        conn = transactional(client)
+        await conn.cursor().execute("SELECT 1")
+
+        with pytest.raises(ProgrammingError, match="transaction is open"):
+            conn.isolation_level = IsolationLevel.AUTOCOMMIT
+
+        assert conn.isolation_level is IsolationLevel.SERIALIZABLE
+
+
 async def test_autocommit_is_the_default_and_sends_no_transaction_header() -> None:
     coordinator = TransactionCoordinator()
     async with coordinator.client() as client:
