@@ -3,8 +3,8 @@
 import json
 from typing import cast, override
 
-from sqlalchemy.engine.default import DefaultDialect
-from sqlalchemy.engine.interfaces import ConnectArgsType, DBAPIModule
+from sqlalchemy.engine.default import DefaultDialect, DefaultExecutionContext
+from sqlalchemy.engine.interfaces import ConnectArgsType, DBAPICursor, DBAPIModule
 from sqlalchemy.engine.url import URL
 from sqlalchemy.util import VersionInfo, parse_version_string
 
@@ -25,6 +25,14 @@ _JSON_QUERY_OPTIONS = (
 )
 
 
+class TrinoExecutionContext(DefaultExecutionContext):
+    """Runs statements on a server-side cursor when results are streamed."""
+
+    @override
+    def create_server_side_cursor(self) -> DBAPICursor:
+        return self._dbapi_connection.cursor(server_side=True)
+
+
 class TrinoDialect(DefaultDialect):
     """Trino through asynctrino, for SQLAlchemy's asyncio extension."""
 
@@ -32,6 +40,8 @@ class TrinoDialect(DefaultDialect):
     driver = "asynctrino"
     is_async = True
     supports_statement_cache = False
+    supports_server_side_cursors = True
+    execution_ctx_cls = TrinoExecutionContext
 
     @override
     @classmethod
@@ -50,6 +60,11 @@ class TrinoDialect(DefaultDialect):
         selects Basic authentication and the ``access_token`` query option JWT authentication;
         either one switches to ``https`` unless ``allow_insecure_auth`` is set. Structured query
         options are JSON.
+
+        Warning:
+            SQLAlchemy masks only the password when it renders a URL, so an ``access_token`` in
+            the query string appears in ``str(engine.url)``, reprs, and logs. For secrets, pass
+            ``connect_args={"auth": JWTAuthentication(token)}`` instead.
 
         Raises:
             ValueError: The URL has a password but no user, or more than catalog and schema.

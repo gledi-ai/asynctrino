@@ -36,6 +36,11 @@ def URL(  # noqa: N802, PLR0913
     The options mean what they mean for :func:`asynctrino.connect`. A ``password`` selects Basic
     authentication and an ``access_token`` JWT authentication.
 
+    Warning:
+        SQLAlchemy masks only the password when it renders a URL, so an ``access_token`` in the
+        query string appears in ``str(engine.url)``, reprs, and logs. For secrets, pass
+        ``connect_args={"auth": JWTAuthentication(token)}`` to ``create_async_engine`` instead.
+
     Raises:
         sqlalchemy.exc.ArgumentError: ``host`` is not a bare host name, or ``password`` is given
             without ``user`` or ``schema`` without ``catalog``.
