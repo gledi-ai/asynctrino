@@ -1,5 +1,3 @@
-"""asynctrino adapted to SQLAlchemy's synchronous DB-API interface through 2.1's async adapters."""
-
 from collections.abc import Awaitable, Callable
 from typing import Any, cast, override
 

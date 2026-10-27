@@ -1,5 +1,3 @@
-"""The ``asynctrino://`` SQLAlchemy dialect for Trino."""
-
 import json
 import logging
 from collections.abc import Mapping, Sequence

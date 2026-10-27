@@ -1,5 +1,3 @@
-"""The SQLAlchemy async engine against a real Coordinator."""
-
 import asyncio
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping

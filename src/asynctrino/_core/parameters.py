@@ -1,5 +1,3 @@
-"""Query parameters bound by formatting them as Trino literals in an ``EXECUTE IMMEDIATE``."""
-
 import math
 import re
 import uuid

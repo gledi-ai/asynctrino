@@ -1,5 +1,3 @@
-"""Isolation levels and the statements that start and end a Trino transaction."""
-
 from enum import StrEnum
 
 NO_TRANSACTION = "NONE"

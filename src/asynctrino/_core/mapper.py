@@ -1,5 +1,3 @@
-"""Values from the Coordinator mapped to Python types, column by column, like Upstream."""
-
 import base64
 import uuid
 from collections.abc import Callable, Iterable, Mapping, Sequence

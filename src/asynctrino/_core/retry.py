@@ -1,5 +1,3 @@
-"""When and how long to wait before retrying a request."""
-
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime

@@ -1,5 +1,3 @@
-"""SQLAlchemy statements compiled to Trino SQL, with no I/O."""
-
 from decimal import Decimal
 
 import pytest

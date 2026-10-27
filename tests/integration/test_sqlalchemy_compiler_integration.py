@@ -1,5 +1,3 @@
-"""SQLAlchemy Core and ORM statements compiled by the dialect and run on a real Coordinator."""
-
 import math
 import uuid
 from collections.abc import AsyncIterator
