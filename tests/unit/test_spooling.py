@@ -7,7 +7,12 @@ import pytest
 
 from asynctrino.auth import BasicAuthentication
 from asynctrino.dbapi import Row, connect
-from asynctrino.exceptions import HttpError, NotSupportedError, TrinoConnectionError
+from asynctrino.exceptions import (
+    HttpError,
+    NotSupportedError,
+    ProgrammingError,
+    TrinoConnectionError,
+)
 from tests.unit.coordinator import JSON, FakeCoordinator, column, statement_pages
 from tests.unit.segments import SIGNATURE, SegmentStorage, encode, inline, spooled_pages
 
@@ -533,3 +538,18 @@ async def test_a_segment_announcing_an_excessive_size_is_rejected(encoding: str)
 
         with pytest.raises(TrinoConnectionError, match="too large"):
             _ = await cur.fetchall()
+
+
+async def test_a_segment_of_a_closed_connection_is_never_downloaded() -> None:
+    storage = spooled_query(lambda s: [[s.spooled("a", [[1, "one"]])]])
+    async with storage.client() as client:
+        conn = connect(host="coordinator", encoding="json", http_client=client)
+        cur = conn.cursor(cursor_style="segment")
+        await cur.execute("SELECT n, s FROM t")
+        [segment] = await cur.fetchall()
+        await conn.close()
+
+        with pytest.raises(ProgrammingError, match="connection is closed"):
+            _ = await segment.data()
+
+    assert storage.segment_requests() == []

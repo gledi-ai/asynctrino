@@ -162,7 +162,14 @@ class _Executor:
         self.session = session
         self.runner = runner
         self.isolation_level = isolation_level
+        self.closed = False
         self._in_flight: Query | None = None
+
+    def check_open(self) -> None:
+        """Raise :class:`ProgrammingError` if the connection was closed."""
+        if self.closed:
+            msg = "connection is closed"
+            raise ProgrammingError(msg)
 
     async def submit(self, query: Query) -> None:
         """Submit ``query``, first starting a transaction if one is due.
@@ -316,9 +323,11 @@ class Connection:
                 this cursor.
 
         Raises:
+            ProgrammingError: The connection is closed.
             ValueError: ``cursor_style`` is ``"segment"`` but the connection has no
                 ``encoding``.
         """
+        self._executor.check_open()
         if legacy_primitive_types is None:
             legacy_primitive_types = self._legacy_primitive_types
         cursor_type = Cursor
@@ -332,18 +341,31 @@ class Connection:
         )
 
     async def commit(self) -> None:
-        """Commit the open transaction. Does nothing in autocommit or when none is open."""
+        """Commit the open transaction. Does nothing in autocommit or when none is open.
+
+        Raises:
+            ProgrammingError: The connection is closed.
+        """
+        self._executor.check_open()
         await self._executor.end(COMMIT)
 
     async def rollback(self) -> None:
-        """Roll back the open transaction. Does nothing in autocommit or when none is open."""
+        """Roll back the open transaction. Does nothing in autocommit or when none is open.
+
+        Raises:
+            ProgrammingError: The connection is closed.
+        """
+        self._executor.check_open()
         await self._executor.end(ROLLBACK)
 
     async def close(self) -> None:
         """Close the connection and the HTTP client, if asynctrino created it.
 
         Unfinished queries of its cursors are cancelled first, as :meth:`Cursor.close` does.
+        Any further use of the connection, its cursors or their Segments raises
+        :class:`ProgrammingError`; closing again does nothing.
         """
+        self._executor.closed = True
         await self._executor.runner.abandon_all()
         await self._executor.runner.transport.aclose()
 
@@ -358,6 +380,8 @@ class Connection:
     ) -> None:
         """Commit if the block succeeded and roll back if it raised, then close."""
         try:
+            if self._executor.closed:
+                return
             if exc_type is None:
                 await self.commit()
             else:
@@ -581,6 +605,7 @@ class _BaseCursor[T](ABC):
         return query
 
     def _check_open(self) -> None:
+        self._executor.check_open()
         if self._closed:
             msg = "cursor is closed"
             raise ProgrammingError(msg)

@@ -393,3 +393,34 @@ async def test_description_reports_length_precision_and_scale_by_type() -> None:
         ("day", "date", None, None, None, None, None),
         ("n", "number", None, None, None, None, None),
     ]
+
+
+async def test_a_closed_connection_and_its_cursors_cannot_be_used() -> None:
+    coordinator = FakeCoordinator(
+        statement_pages(columns=[column("_col0", "integer")], batches=[[[1]]])
+    )
+    async with coordinator.client() as client:
+        conn = connect(host="coordinator", http_client=client)
+        cur = conn.cursor()
+        await cur.execute("SELECT 1")
+        await conn.close()
+        sent = len(coordinator.requests)
+
+        with pytest.raises(ProgrammingError, match="connection is closed"):
+            _ = conn.cursor()
+        with pytest.raises(ProgrammingError, match="connection is closed"):
+            await cur.execute("SELECT 1")
+        with pytest.raises(ProgrammingError, match="connection is closed"):
+            await cur.fetchall()
+        with pytest.raises(ProgrammingError, match="connection is closed"):
+            await conn.commit()
+        with pytest.raises(ProgrammingError, match="connection is closed"):
+            await conn.rollback()
+        await conn.close()
+
+    assert len(coordinator.requests) == sent
+
+
+async def test_closing_a_connection_inside_its_async_with_block_is_harmless() -> None:
+    async with connect(host="coordinator") as conn:
+        await conn.close()

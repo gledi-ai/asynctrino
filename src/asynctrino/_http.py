@@ -17,7 +17,7 @@ from asynctrino._core.query import Query
 from asynctrino._core.retry import RetryPolicy
 from asynctrino._core.segments import SpooledSegment
 from asynctrino._core.status import check_status
-from asynctrino.exceptions import Error, TrinoConnectionError
+from asynctrino.exceptions import Error, ProgrammingError, TrinoConnectionError
 
 DEFAULT_REQUEST_TIMEOUT = 30.0
 DEFAULT_HEARTBEAT_INTERVAL = 30.0
@@ -53,11 +53,13 @@ class Transport:
         self._verify = verify
         self._retry = retry
         self._timeout = timeout
+        self._closed = False
 
     async def send(self, request: HttpRequest) -> HttpResponse:
         """Send ``request`` and read the whole response, retrying as the core decides.
 
         Raises:
+            ProgrammingError: The transport was closed.
             TrinoConnectionError: The last attempt failed without an HTTP response.
         """
         for attempt in count(1):
@@ -81,6 +83,9 @@ class Transport:
         return outcome
 
     async def _attempt(self, request: HttpRequest) -> HttpResponse | Exception:
+        if self._closed:
+            msg = "connection is closed"
+            raise ProgrammingError(msg)
         if self._client is None:
             self._client = httpx2.AsyncClient(
                 verify=_ssl_context(verify=self._verify), timeout=self._timeout
@@ -105,7 +110,8 @@ class Transport:
         return HttpResponse(response.status_code, response.content, response.headers)
 
     async def aclose(self) -> None:
-        """Close the client if this transport created it."""
+        """Refuse any further request, and close the client if this transport created it."""
+        self._closed = True
         if self._owns_client and self._client is not None:
             await self._client.aclose()
             self._client = None
