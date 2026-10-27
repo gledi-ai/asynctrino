@@ -67,6 +67,7 @@ class RetryPolicy:
 
 
 def _is_transient(outcome: HttpResponse | Exception, request: HttpRequest) -> bool:
+    # Retrying the statement POST is safe: Trino starts a query only on the first GET of nextUri.
     if isinstance(outcome, Exception):
         return isinstance(outcome, RETRYABLE_ERRORS)
     if outcome.status_code in RETRYABLE_STATUSES:
