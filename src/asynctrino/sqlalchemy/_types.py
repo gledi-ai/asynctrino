@@ -1,5 +1,6 @@
 """Trino-specific SQLAlchemy types, and the parser for Trino type strings."""
 
+import json
 import re
 from collections.abc import Callable, Iterator, Sequence
 from typing import Any, override
@@ -149,60 +150,53 @@ def _double_literal(value: float) -> str:
 
 
 class JSONIndexType(sqltypes.JSON.JSONIndexType):
-    """A JSON index, ``column["key"]``, bound as the JSON path ``$["key"]``."""
+    """A JSON index, ``column["key"]`` or ``column[0]``, as the path ``$["key"]`` or ``$[0]``."""
 
     @override
     def bind_processor(self, dialect: Dialect) -> _BindProcessorType[object]:
-        return _json_path_binder(self, dialect, _format_index)
+        return _index_path
 
     @override
     def literal_processor(self, dialect: Dialect) -> _LiteralProcessorType[object]:
-        return _json_path_renderer(self, dialect, _format_index)
+        return _literal(_index_path)
 
 
 class JSONPathType(sqltypes.JSON.JSONPathType):
-    """A JSON path, ``column["a", "b"]``, bound as the JSON path ``$["a"]["b"]``."""
+    """A JSON path, ``column["a", 0]``, as the JSON path ``$["a"][0]``."""
 
     @override
     def bind_processor(self, dialect: Dialect) -> _BindProcessorType[object]:
-        return _json_path_binder(self, dialect, _format_path)
+        return _path
 
     @override
     def literal_processor(self, dialect: Dialect) -> _LiteralProcessorType[object]:
-        return _json_path_renderer(self, dialect, _format_path)
+        return _literal(_path)
 
 
-def _format_index(value: object) -> str:
-    return f'$["{value}"]'
+def _index_path(value: object) -> str:
+    return "$" + _path_element(value)
 
 
-def _format_path(value: object) -> str:
-    elements: Sequence[object] = (
-        value if isinstance(value, Sequence) and not isinstance(value, str) else [value]
-    )
-    return "$" + "".join(f'["{element}"]' for element in elements)
+def _path(value: object) -> str:
+    if not isinstance(value, Sequence) or isinstance(value, str):
+        msg = f"A JSON path must be a sequence of keys and indexes, got {value!r}"
+        raise TypeError(msg)
+    elements: Sequence[object] = value
+    return "$" + "".join(_path_element(element) for element in elements)
 
 
-def _json_path_binder(
-    element: sqltypes.JSON.JSONElementType, dialect: Dialect, path: Callable[[object], str]
-) -> _BindProcessorType[object]:
-    string = element.string_bind_processor(dialect)
-
-    def process(value: object) -> object:
-        formatted = path(value)
-        return formatted if string is None else string(formatted)
-
-    return process
+def _path_element(value: object) -> str:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return f"[{value:d}]"
+    if isinstance(value, str):
+        return f"[{json.dumps(value, ensure_ascii=False)}]"
+    msg = f"A JSON path element must be a str key or an int index, got {value!r}"
+    raise TypeError(msg)
 
 
-def _json_path_renderer(
-    element: sqltypes.JSON.JSONElementType, dialect: Dialect, path: Callable[[object], str]
-) -> _LiteralProcessorType[object]:
-    string = element.string_literal_processor(dialect)
-
+def _literal(path: Callable[[object], str]) -> _LiteralProcessorType[object]:
     def process(value: object) -> str:
-        formatted = path(value)
-        return format_parameter(formatted) if string is None else string(formatted)
+        return format_parameter(path(value))
 
     return process
 

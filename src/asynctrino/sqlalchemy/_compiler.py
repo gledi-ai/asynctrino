@@ -8,8 +8,9 @@ from sqlalchemy import util
 from sqlalchemy.sql import compiler, sqltypes
 from sqlalchemy.sql._typing import _ColumnExpressionArgument, _ColumnExpressionOrLiteralArgument
 from sqlalchemy.sql.compiler import _ResultMapAppender
-from sqlalchemy.sql.elements import TryCast
+from sqlalchemy.sql.elements import BinaryExpression, FrameClause, TryCast
 from sqlalchemy.sql.functions import Function, ReturnTypeFromArgs
+from sqlalchemy.sql.operators import OperatorType
 from sqlalchemy.sql.schema import (
     ForeignKeyConstraint,
     PrimaryKeyConstraint,
@@ -210,6 +211,28 @@ class TrinoSQLCompiler(compiler.SQLCompiler):
         if isinstance(func, IgnoreNullsFunction) and func.ignore_nulls:
             return f"{sql} IGNORE NULLS"
         return sql
+
+    def visit_json_getitem_op_binary(
+        self, binary: BinaryExpression[object], _operator: OperatorType, **kw: object
+    ) -> str:
+        """Render ``column["key"]`` as ``JSON_EXTRACT(column, '$["key"]')``."""
+        return self._json_extract(binary, **kw)
+
+    def visit_json_path_getitem_op_binary(
+        self, binary: BinaryExpression[object], _operator: OperatorType, **kw: object
+    ) -> str:
+        """Render ``column["a", 0]`` as ``JSON_EXTRACT(column, '$["a"][0]')``."""
+        return self._json_extract(binary, **kw)
+
+    def _json_extract(self, binary: BinaryExpression[object], **kw: object) -> str:
+        return (
+            f"JSON_EXTRACT({self.process(binary.left, **kw)}, {self.process(binary.right, **kw)})"
+        )
+
+    @override
+    def visit_frame_clause(self, frameclause: FrameClause, **kw: object) -> str:
+        """Render frame offsets as literals, since Trino doesn't accept parameters there."""
+        return super().visit_frame_clause(frameclause, **{**kw, "literal_binds": True})
 
     def visit_try_cast(self, cast: TryCast[object], **kw: object) -> str:
         """Render ``try_cast(x as type)``, which yields ``NULL`` where the cast fails."""

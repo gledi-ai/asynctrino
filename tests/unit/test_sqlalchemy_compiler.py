@@ -33,6 +33,7 @@ from sqlalchemy import (
 from sqlalchemy.exc import CompileError, SAWarning
 from sqlalchemy.schema import CreateTable
 from sqlalchemy.sql import column, table
+from sqlalchemy.sql.elements import Over
 
 from asynctrino.sqlalchemy import (
     DOUBLE,
@@ -162,6 +163,50 @@ def test_try_cast(dialect: TrinoDialect) -> None:
     assert str(query) == 'SELECT try_cast("table".id as VARCHAR) AS id \nFROM "table"'
 
 
+documents = Table("documents", MetaData(), Column("data", JSON))
+
+
+def test_json_index_is_extracted_with_a_bound_path(dialect: TrinoDialect) -> None:
+    query = select(documents.c.data["a"]).compile(dialect=dialect)
+
+    assert str(query) == "SELECT JSON_EXTRACT(documents.data, :data_1) AS anon_1 \nFROM documents"
+
+
+@pytest.mark.parametrize(
+    ("index", "expected"),
+    [
+        ("a", """'$["a"]'"""),
+        ('a"]', """'$["a\\"]"]'"""),
+        ("a\\b", """'$["a\\\\b"]'"""),
+        ("it's", """'$["it''s"]'"""),
+        (2, "'$[2]'"),
+        (("a", 1, "b"), """'$["a"][1]["b"]'"""),
+    ],
+    ids=repr,
+)
+def test_json_paths_quote_keys_and_index_arrays(
+    dialect: TrinoDialect, index: str | int | tuple[str | int, ...], expected: str
+) -> None:
+    query = select(documents.c.data[index]).compile(
+        dialect=dialect, compile_kwargs={"literal_binds": True}
+    )
+
+    assert (
+        str(query) == f"SELECT JSON_EXTRACT(documents.data, {expected}) AS anon_1 \nFROM documents"
+    )
+
+
+@pytest.mark.parametrize("index", [True, 1.5, ("a", None)], ids=repr)
+def test_json_path_rejects_other_keys(dialect: TrinoDialect, index: object) -> None:
+    with pytest.raises(CompileError) as raised:
+        _ = select(documents.c.data[index]).compile(
+            dialect=dialect, compile_kwargs={"literal_binds": True}
+        )
+
+    assert isinstance(raised.value.__cause__, TypeError)
+    assert "JSON path" in str(raised.value.__cause__)
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
@@ -272,3 +317,33 @@ def test_create_table_leaves_out_constraints_with_a_warning(dialect: TrinoDialec
         f"Trino does not support {kind} constraints. Constraint will be ignored."
         for kind in ("FOREIGN KEY", "PRIMARY KEY", "UNIQUE")
     ]
+
+
+summed = func.sum(table_without_catalog.c.id)
+by_id = table_without_catalog.c.id
+
+
+@pytest.mark.parametrize(
+    ("window", "expected"),
+    [
+        (summed.over(order_by=by_id, rows=(-2, 0)), "ROWS BETWEEN 2 PRECEDING AND CURRENT ROW"),
+        (
+            summed.over(order_by=by_id, rows=(None, 3)),
+            "ROWS BETWEEN UNBOUNDED PRECEDING AND 3 FOLLOWING",
+        ),
+        (
+            summed.over(order_by=by_id, range_=(1, None)),
+            "RANGE BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING",
+        ),
+        (summed.over(order_by=by_id, groups=(-1, 1)), "GROUPS BETWEEN 1 PRECEDING AND 1 FOLLOWING"),
+    ],
+)
+def test_window_frame_bounds_are_literals(
+    dialect: TrinoDialect, window: Over[int], expected: str
+) -> None:
+    query = select(window).compile(dialect=dialect)
+
+    assert str(query) == (
+        f'SELECT sum("table".id) OVER (ORDER BY "table".id {expected}) AS anon_1 \nFROM "table"'
+    )
+    assert query.params == {}

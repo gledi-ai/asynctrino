@@ -7,12 +7,12 @@ from typing import Protocol
 
 import httpx2
 import pytest
-from sqlalchemy import exc, text
+from sqlalchemy import Column, MetaData, Table, exc, select, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from asynctrino.auth import BasicAuthentication
 from asynctrino.dbapi import Connection
-from asynctrino.sqlalchemy import URL
+from asynctrino.sqlalchemy import JSON, URL
 from tests.unit.coordinator import (
     FakeCoordinator,
     TransactionCoordinator,
@@ -147,6 +147,43 @@ async def test_bound_parameters_are_sent_as_qmark_parameters() -> None:
 
     [post] = [r for r in coordinator.requests if r.method == "POST"]
     assert post.content.decode() == "EXECUTE IMMEDIATE 'SELECT ?, ?' USING 1,'it''s'"
+
+
+documents = Table("documents", MetaData(), Column("data", JSON))
+
+
+@pytest.mark.parametrize(
+    ("index", "path"),
+    [
+        ("a", """'$["a"]'"""),
+        ('a"]', """'$["a\\"]"]'"""),
+        ("a\\b", """'$["a\\\\b"]'"""),
+        (2, "'$[2]'"),
+        (("a", 1), """'$["a"][1]'"""),
+    ],
+    ids=repr,
+)
+async def test_json_paths_are_bound_with_keys_quoted(
+    index: str | int | tuple[str | int, ...], path: str
+) -> None:
+    coordinator = one_row_coordinator()
+    async with connection_to(coordinator) as conn:
+        _ = await conn.execute(select(documents.c.data[index]))
+
+    [post] = [r for r in coordinator.requests if r.method == "POST"]
+    assert post.content.decode() == (
+        "EXECUTE IMMEDIATE 'SELECT JSON_EXTRACT(documents.data, ?) AS anon_1 \n"
+        f"FROM documents' USING {path}"
+    )
+
+
+async def test_json_path_with_an_unsupported_key_is_refused() -> None:
+    coordinator = one_row_coordinator()
+    async with connection_to(coordinator) as conn:
+        with pytest.raises(exc.StatementError, match="JSON path element"):
+            _ = await conn.execute(select(documents.c.data[1.5]))
+
+    assert [r for r in coordinator.requests if r.method == "POST"] == []
 
 
 def paged_coordinator() -> FakeCoordinator:
