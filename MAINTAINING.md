@@ -72,7 +72,7 @@ prints the notes of the release tagged at `HEAD`.
 - Protect `v*` tags with a ruleset so only maintainers can create them.
 - Protect `main` with a ruleset: changes arrive only through pull requests that are up to date
   with `main` and pass every `ci` job, merged by rebase, with no force pushes or deletion.
-  Nobody bypasses it.
+  Only repository admins bypass it.
 
 ## Trino versions
 
