@@ -132,31 +132,31 @@ class IgnoreNullsFunction[T](ReturnTypeFromArgs[T]):
         self.ignore_nulls: bool = ignore_nulls
 
 
-class first_value[T](IgnoreNullsFunction[T]):  # noqa: N801
+class first_value[T](IgnoreNullsFunction[T]):
     """``first_value(x)``, optionally ``IGNORE NULLS``."""
 
     inherit_cache = True
 
 
-class last_value[T](IgnoreNullsFunction[T]):  # noqa: N801
+class last_value[T](IgnoreNullsFunction[T]):
     """``last_value(x)``, optionally ``IGNORE NULLS``."""
 
     inherit_cache = True
 
 
-class nth_value[T](IgnoreNullsFunction[T]):  # noqa: N801
+class nth_value[T](IgnoreNullsFunction[T]):
     """``nth_value(x, offset)``, optionally ``IGNORE NULLS``."""
 
     inherit_cache = True
 
 
-class lead[T](IgnoreNullsFunction[T]):  # noqa: N801
+class lead[T](IgnoreNullsFunction[T]):
     """``lead(x[, offset[, default]])``, optionally ``IGNORE NULLS``."""
 
     inherit_cache = True
 
 
-class lag[T](IgnoreNullsFunction[T]):  # noqa: N801
+class lag[T](IgnoreNullsFunction[T]):
     """``lag(x[, offset[, default]])``, optionally ``IGNORE NULLS``."""
 
     inherit_cache = True
@@ -390,22 +390,22 @@ class TrinoTypeCompiler(compiler.GenericTypeCompiler):
     def visit_TIME(self, type_: sqltypes.Time, **kw: object) -> str:
         return _datetime_type("TIME", type_)
 
-    def visit_JSON(self, _type: sqltypes.JSON, **_kw: object) -> str:  # noqa: N802
+    def visit_JSON(self, _type: sqltypes.JSON, **_kw: object) -> str:
         """Trino's ``JSON``."""
         return "JSON"
 
-    def visit_ARRAY(self, type_: sqltypes.ARRAY[object], **kw: object) -> str:  # noqa: N802
+    def visit_ARRAY(self, type_: sqltypes.ARRAY[object], **kw: object) -> str:
         """``ARRAY(item)``, nested once per dimension."""
         sql = self.process(type_.item_type, **kw)
         for _ in range(1 if type_.dimensions is None else type_.dimensions):
             sql = f"ARRAY({sql})"
         return sql
 
-    def visit_MAP(self, type_: MAP, **kw: object) -> str:  # noqa: N802
+    def visit_MAP(self, type_: MAP, **kw: object) -> str:
         """``MAP(key, value)``."""
         return f"MAP({self.process(type_.key_type, **kw)}, {self.process(type_.value_type, **kw)})"
 
-    def visit_ROW(self, type_: ROW, **kw: object) -> str:  # noqa: N802
+    def visit_ROW(self, type_: ROW, **kw: object) -> str:
         """``ROW(name type, ...)``, quoting names where needed."""
         quote = self.dialect.identifier_preparer.quote
         fields = (

@@ -99,8 +99,20 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "S105", "S106", "PLR2004", "SLF001", "D", "INP001", "DTZ001"]
-"noxfile.py" = ["D"]
+"tests/**" = [
+  "S101",
+  "PLR2004",
+  "SLF001",
+  "S105",    # fake passwords and tokens are test data
+  "S106",    # the same, passed as keyword arguments
+  "D",       # test names say what they check
+  "DTZ001",  # naive datetimes are expected values for TIMESTAMP without time zone
+]
+"src/asynctrino/sqlalchemy/_compiler.py" = [
+  "N801",  # window functions are named after the SQL functions they render, like SQLAlchemy's
+  "N802",  # SQLAlchemy dispatches types to visit_<UPPERCASE name>
+]
+"noxfile.py" = ["D"]  # sessions are described by their names
 "typings/**" = ["A002"]  # stubs mirror upstream parameter names
 
 [tool.ruff.lint.pydocstyle]
