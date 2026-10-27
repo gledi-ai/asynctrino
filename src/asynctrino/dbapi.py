@@ -18,7 +18,13 @@ import httpx2
 from asynctrino._core.coordinator import Coordinator, HttpScheme
 from asynctrino._core.query import Query, StatsCallback
 from asynctrino._core.retry import DEFAULT_MAX_ATTEMPTS, RetryPolicy
-from asynctrino._core.session import DEFAULT_SOURCE, ClientSession, SessionState, format_roles
+from asynctrino._core.session import (
+    DEFAULT_SOURCE,
+    ClientSession,
+    SessionState,
+    format_roles,
+    session_timezone,
+)
 from asynctrino._core.status import Column, Row
 from asynctrino._http import DEFAULT_REQUEST_TIMEOUT, Transport, fetch_more, submit
 from asynctrino.exceptions import (
@@ -112,20 +118,42 @@ class Connection:
     """A connection to a Trino Coordinator. Create it with :func:`connect`."""
 
     def __init__(
-        self, coordinator: Coordinator, session: ClientSession, transport: Transport
+        self,
+        coordinator: Coordinator,
+        session: ClientSession,
+        transport: Transport,
+        *,
+        legacy_primitive_types: bool,
     ) -> None:
         self._coordinator = coordinator
         self._session = SessionState(session)
         self._transport = transport
+        self._legacy_primitive_types = legacy_primitive_types
 
-    def cursor(self, *, stats_callback: StatsCallback | None = None) -> Cursor:
+    def cursor(
+        self,
+        *,
+        stats_callback: StatsCallback | None = None,
+        legacy_primitive_types: bool | None = None,
+    ) -> Cursor:
         """Return a new cursor. No I/O happens until :meth:`Cursor.execute`.
 
         Args:
             stats_callback: Called with a copy of the query statistics after every Coordinator
                 response, so progress can be reported while a statement runs.
+            legacy_primitive_types: Override the connection's ``legacy_primitive_types`` for
+                this cursor.
         """
-        return Cursor(self, self._coordinator, self._session, self._transport, stats_callback)
+        if legacy_primitive_types is None:
+            legacy_primitive_types = self._legacy_primitive_types
+        return Cursor(
+            self,
+            self._coordinator,
+            self._session,
+            self._transport,
+            stats_callback,
+            legacy_primitive_types=legacy_primitive_types,
+        )
 
     async def close(self) -> None:
         """Close the connection and the HTTP client, if asynctrino created it."""
@@ -150,19 +178,22 @@ class Cursor:
         arraysize: How many rows :meth:`fetchmany` returns when no size is given.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         connection: Connection,
         coordinator: Coordinator,
         session: SessionState,
         transport: Transport,
         stats_callback: StatsCallback | None = None,
+        *,
+        legacy_primitive_types: bool,
     ) -> None:
         self._connection = connection
         self._coordinator = coordinator
         self._session = session
         self._transport = transport
         self._stats_callback = stats_callback
+        self._legacy_primitive_types = legacy_primitive_types
         self._query: Query | None = None
         self._closed = False
         self.arraysize = 1
@@ -223,7 +254,13 @@ class Cursor:
         so :attr:`description` is accurate afterwards.
         """
         self._check_open()
-        self._query = Query(operation, self._coordinator, self._session, self._stats_callback)
+        self._query = Query(
+            operation,
+            self._coordinator,
+            self._session,
+            self._stats_callback,
+            legacy_primitive_types=self._legacy_primitive_types,
+        )
         await submit(self._query, self._transport)
         return self
 
@@ -307,6 +344,7 @@ def connect(  # noqa: PLR0913
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     request_timeout: float | httpx2.Timeout = DEFAULT_REQUEST_TIMEOUT,
     http_client: httpx2.AsyncClient | None = None,
+    legacy_primitive_types: bool = False,
 ) -> Connection:
     """Create a connection to a Trino Coordinator without doing any I/O.
 
@@ -323,7 +361,8 @@ def connect(  # noqa: PLR0913
         roles: Roles to enable, per catalog (``{"hive": "admin"}``); a plain string is the
             ``system`` role. ``ALL`` and ``NONE`` are passed through.
         extra_credential: ``(key, value)`` credentials passed to connectors.
-        timezone: The IANA time zone queries run in, such as ``"Europe/Brussels"``.
+        timezone: The IANA time zone queries run in, such as ``"Europe/Brussels"``. Defaults to
+            the local time zone.
         http_headers: Extra HTTP headers for every Coordinator request. They can't replace
             the headers asynctrino sends itself, and never go to Segment storage.
         http_scheme: ``"http"`` or ``"https"``. Defaults to ``https`` when the port is 443.
@@ -346,6 +385,8 @@ def connect(  # noqa: PLR0913
             proxy settings. asynctrino never closes it or changes its defaults. Without one, a
             client is created on the first request, honours the proxy environment variables
             (``HTTPS_PROXY``, ``NO_PROXY``, ...), and is closed with the connection.
+        legacy_primitive_types: Return every value as the Coordinator sent it, without mapping
+            it to a Python type. :meth:`Connection.cursor` can override it per cursor.
 
     Returns:
         A new :class:`Connection`.
@@ -356,7 +397,7 @@ def connect(  # noqa: PLR0913
         ValueError: ``max_attempts`` is less than 1, ``http_scheme`` is unknown, an
             ``extra_credential`` key is not ASCII or contains whitespace or ``=``, or
             ``http_headers`` would override a header asynctrino sends itself.
-        ZoneInfoNotFoundError: ``timezone`` is not a known IANA time zone.
+        zoneinfo.ZoneInfoNotFoundError: ``timezone`` is not a known IANA time zone.
     """
     coordinator = Coordinator.resolve(host, port, http_scheme)
     if auth is not None and not coordinator.uses_tls and not allow_insecure_auth:
@@ -372,7 +413,7 @@ def connect(  # noqa: PLR0913
             client_tags=tuple(client_tags),
             roles=format_roles(roles),
             extra_credential=tuple(extra_credential),
-            timezone=timezone,
+            timezone=session_timezone(timezone),
             http_headers={} if http_headers is None else dict(http_headers),
         ),
         Transport(
@@ -382,4 +423,5 @@ def connect(  # noqa: PLR0913
             retry=RetryPolicy(max_attempts=max_attempts),
             timeout=request_timeout,
         ),
+        legacy_primitive_types=legacy_primitive_types,
     )

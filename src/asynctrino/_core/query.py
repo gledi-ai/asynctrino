@@ -6,6 +6,7 @@ from collections.abc import Callable
 from importlib.metadata import version
 
 from asynctrino._core.coordinator import Coordinator
+from asynctrino._core.mapper import RowMapper
 from asynctrino._core.messages import HttpRequest, HttpResponse
 from asynctrino._core.session import SessionState
 from asynctrino._core.status import Column, Row, parse_status
@@ -19,7 +20,8 @@ class Query:
     """Follows a statement from its POST through every ``nextUri`` until it finishes.
 
     The I/O layer sends :meth:`start`, then repeatedly :meth:`advance`, handing each response
-    to :meth:`receive`. Received rows queue up until taken with :meth:`take_rows`.
+    to :meth:`receive`. Received rows are mapped to Python types, unless
+    ``legacy_primitive_types`` is set, and queue up until taken with :meth:`take_rows`.
     """
 
     def __init__(
@@ -28,11 +30,14 @@ class Query:
         coordinator: Coordinator,
         session: SessionState,
         stats_callback: StatsCallback | None = None,
+        *,
+        legacy_primitive_types: bool = False,
     ) -> None:
         self.sql = sql
         self._coordinator = coordinator
         self._session = session
         self._stats_callback = stats_callback
+        self._legacy_primitive_types = legacy_primitive_types
         self.query_id: str | None = None
         self.info_uri: str | None = None
         self.stats: dict[str, object] = {}
@@ -40,6 +45,7 @@ class Query:
         self.update_type: str | None = None
         self.update_count: int | None = None
         self.columns: list[Column] | None = None
+        self._row_mapper: RowMapper | None = None
         self._next_uri: str | None = None
         self._started = False
         self._rows: deque[Row] = deque()
@@ -94,7 +100,10 @@ class Query:
         self._next_uri = status.next_uri
         if status.columns is not None:
             self.columns = status.columns
-        self._rows.extend(status.rows)
+            if not self._legacy_primitive_types:
+                self._row_mapper = RowMapper(status.columns)
+        mapper = self._row_mapper
+        self._rows.extend(status.rows if mapper is None else map(mapper.map, status.rows))
 
     def take_rows(self, limit: int | None = None) -> list[Row]:
         """Remove and return up to ``limit`` buffered rows (all of them when ``None``)."""
