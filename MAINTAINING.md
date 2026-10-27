@@ -22,7 +22,7 @@ that isn't on `main` or is red in CI can't be released. It then checks that the 
 Python 3.14 and 3.15 and imports them. Publishing uses PyPI trusted publishing, so the repository
 holds no tokens.
 
-1. Make sure `main` holds everything to ship. Tag only commits already pushed to `main`.
+1. Make sure `main` holds everything to ship. Tag only commits on `main`.
 2. Optionally, try a release candidate:
 
    ```shell
@@ -35,15 +35,23 @@ holds no tokens.
 3. File the unreleased changes under the version and commit the changelog. The release workflow
    refuses a stable tag whose version has no `CHANGELOG.md` section.
 
+   `main` only takes rebase merges of pull requests whose `ci` passed, so the changelog goes
+   through a pull request too:
+
    ```shell
+   git switch -c release/v0.1.0
    make changelog VERSION=v0.1.0
    git commit -am "chore(changelog): release 0.1.0"
-   git push origin main
+   git push -u origin release/v0.1.0
+   gh pr create --fill
+   gh pr merge --rebase --auto --delete-branch
    ```
 
-4. Tag that commit and push the tag:
+4. Once it merges, tag the merged commit on `main` and push the tag:
 
    ```shell
+   git switch main
+   git pull
    git tag -a v0.1.0 -m "asynctrino 0.1.0"
    git push origin v0.1.0
    ```
@@ -62,6 +70,9 @@ prints the notes of the release tagged at `HEAD`.
 - In the GitHub repository, create the environments `testpypi` and `pypi`, give `pypi` required
   reviewers, and limit both to `v*` tags.
 - Protect `v*` tags with a ruleset so only maintainers can create them.
+- Protect `main` with a ruleset: changes arrive only through pull requests that are up to date
+  with `main` and pass every `ci` job, merged by rebase, with no force pushes or deletion.
+  Nobody bypasses it.
 
 ## Trino versions
 
