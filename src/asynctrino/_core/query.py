@@ -57,6 +57,7 @@ class Query:
         self._row_mapper: RowMapper | None = None
         self._next_uri: str | None = None
         self._started = False
+        self.cancelled = False
         self._rows: deque[Row] = deque()
         self._segments: deque[Segment] = deque()
 
@@ -66,13 +67,18 @@ class Query:
         return self._started and self._next_uri is None
 
     @property
+    def running(self) -> bool:
+        """Whether the query was submitted and has neither finished nor been cancelled."""
+        return self._next_uri is not None and not self.cancelled
+
+    @property
     def ready(self) -> bool:
         """Whether ``execute`` can return.
 
         A query is ready once rows are buffered or its columns are known. An update statement is
         only ready when finished, so its update count is known and it is never cancelled on close.
         """
-        if self.finished:
+        if self.finished or self.cancelled:
             return True
         buffered = len(self._rows) > 0 or len(self._segments) > 0
         return self.update_type is None and (buffered or self.columns is not None)
@@ -95,10 +101,22 @@ class Query:
         return HttpRequest("POST", url, headers, self.sql.encode(), statement=True)
 
     def advance(self) -> HttpRequest | None:
-        """The GET for the next page, or ``None`` once the query has finished."""
-        if self._next_uri is None:
+        """The GET for the next page, or ``None`` once the query has finished or was cancelled."""
+        if self._next_uri is None or self.cancelled:
             return None
         return HttpRequest("GET", self._next_uri, self._headers(), statement=True)
+
+    def cancel(self) -> HttpRequest | None:
+        """Abandon the query: the ``DELETE`` that stops it, or ``None`` if nothing is running.
+
+        The query counts as cancelled from now on, whatever the Coordinator answers, and its
+        buffered rows are dropped.
+        """
+        if self.cancelled or self._next_uri is None:
+            return None
+        self.cancelled = True
+        self._rows.clear()
+        return HttpRequest("DELETE", self._next_uri, self._headers())
 
     def receive(self, response: HttpResponse) -> None:
         """Apply a Coordinator response to the query's state and buffer its rows."""

@@ -17,6 +17,7 @@ from typing import ClassVar, Final, Literal, NamedTuple, Self, overload, overrid
 import httpx2
 
 from asynctrino._core.coordinator import Coordinator, HttpScheme
+from asynctrino._core.parameters import execute_immediate
 from asynctrino._core.query import Query, StatsCallback
 from asynctrino._core.retry import DEFAULT_MAX_ATTEMPTS, RetryPolicy
 from asynctrino._core.segments import (
@@ -35,13 +36,19 @@ from asynctrino._core.session import (
     session_timezone,
 )
 from asynctrino._core.status import Column, Row
+from asynctrino._core.transaction import (
+    COMMIT,
+    NO_TRANSACTION,
+    ROLLBACK,
+    IsolationLevel,
+    start_transaction,
+)
 from asynctrino._http import (
     DEFAULT_REQUEST_TIMEOUT,
+    QueryRunner,
     Transport,
     acknowledge_segment,
-    fetch_more,
     segment_data,
-    submit,
 )
 from asynctrino.exceptions import (
     DatabaseError,
@@ -67,6 +74,7 @@ __all__ = [
     "IntegrityError",
     "InterfaceError",
     "InternalError",
+    "IsolationLevel",
     "NotSupportedError",
     "OperationalError",
     "ProgrammingError",
@@ -133,8 +141,92 @@ class ColumnDescription(NamedTuple):
         )
 
 
+class _Executor:
+    """Runs a connection's statements, inside its transactions unless it is in autocommit.
+
+    A transaction starts with the first statement and ends with :meth:`end`. While it is open,
+    a statement is in flight from its submission until it finishes, fails, is cancelled, or is
+    released.
+    """
+
+    def __init__(
+        self,
+        coordinator: Coordinator,
+        session: SessionState,
+        runner: QueryRunner,
+        isolation_level: IsolationLevel,
+    ) -> None:
+        self.coordinator = coordinator
+        self.session = session
+        self.runner = runner
+        self.isolation_level = isolation_level
+        self._in_flight: Query | None = None
+
+    async def submit(self, query: Query) -> None:
+        """Submit ``query``, first starting a transaction if one is due.
+
+        Raises:
+            ProgrammingError: Another statement is in flight in the transaction.
+        """
+        if self.isolation_level is IsolationLevel.AUTOCOMMIT:
+            await self.runner.submit(query)
+            return
+        in_flight = self._in_flight
+        if in_flight is not None and not (in_flight.finished or in_flight.cancelled):
+            msg = (
+                "another statement is still in flight in this transaction; "
+                "fetch all of its rows or close its cursor first"
+            )
+            raise ProgrammingError(msg)
+        self._in_flight = query
+        try:
+            if not self.session.current.in_transaction:
+                await self._run(start_transaction(self.isolation_level))
+            await self.runner.submit(query)
+        except BaseException:
+            self.release(query)
+            raise
+
+    async def fetch_more(self, query: Query) -> bool:
+        """Fetch the next page of ``query``; return ``False`` if it had already ended."""
+        try:
+            return await self.runner.fetch_more(query)
+        except BaseException:
+            self.release(query)
+            raise
+
+    def release(self, query: Query | None) -> None:
+        """Stop counting ``query`` as the transaction's statement in flight."""
+        if query is not None and self._in_flight is query:
+            self._in_flight = None
+
+    async def end(self, sql: str) -> None:
+        """End the open transaction with ``COMMIT`` or ``ROLLBACK``; do nothing if none is open.
+
+        The transaction is over even if the statement fails, so the next one starts afresh.
+        """
+        if not self.session.current.in_transaction:
+            return
+        try:
+            await self._run(sql)
+        finally:
+            self._in_flight = None
+            self.session.end_transaction()
+
+    async def _run(self, sql: str) -> None:
+        query = Query(sql, self.coordinator, self.session)
+        await self.runner.submit(query)
+        while query.running:
+            await self.runner.fetch_more(query)
+
+
 class Connection:
-    """A connection to a Trino Coordinator. Create it with :func:`connect`."""
+    """A connection to a Trino Coordinator. Create it with :func:`connect`.
+
+    Outside autocommit, statements run in a transaction that starts with the first
+    :meth:`Cursor.execute` and ends with :meth:`commit` or :meth:`rollback`. Only one statement
+    can be in flight in a transaction at a time.
+    """
 
     def __init__(
         self,
@@ -143,11 +235,17 @@ class Connection:
         transport: Transport,
         *,
         legacy_primitive_types: bool,
+        isolation_level: IsolationLevel = IsolationLevel.AUTOCOMMIT,
     ) -> None:
-        self._coordinator = coordinator
-        self._session = SessionState(session)
-        self._transport = transport
+        self._executor = _Executor(
+            coordinator, SessionState(session), QueryRunner(transport), isolation_level
+        )
         self._legacy_primitive_types = legacy_primitive_types
+
+    @property
+    def isolation_level(self) -> IsolationLevel:
+        """How this connection runs statements: in autocommit, or in transactions at this level."""
+        return self._executor.isolation_level
 
     @overload
     def cursor(
@@ -192,22 +290,29 @@ class Connection:
             legacy_primitive_types = self._legacy_primitive_types
         cursor_type = Cursor
         if cursor_style == "segment":
-            if self._session.current.encoding is None:
+            if self._executor.session.current.encoding is None:
                 msg = "cursor_style='segment' needs an encoding set on the connection"
                 raise ValueError(msg)
             cursor_type = SegmentCursor
         return cursor_type(
-            self,
-            self._coordinator,
-            self._session,
-            self._transport,
-            stats_callback,
-            legacy_primitive_types=legacy_primitive_types,
+            self, self._executor, stats_callback, legacy_primitive_types=legacy_primitive_types
         )
 
+    async def commit(self) -> None:
+        """Commit the open transaction. Does nothing in autocommit or when none is open."""
+        await self._executor.end(COMMIT)
+
+    async def rollback(self) -> None:
+        """Roll back the open transaction. Does nothing in autocommit or when none is open."""
+        await self._executor.end(ROLLBACK)
+
     async def close(self) -> None:
-        """Close the connection and the HTTP client, if asynctrino created it."""
-        await self._transport.aclose()
+        """Close the connection and the HTTP client, if asynctrino created it.
+
+        Unfinished queries of its cursors are cancelled first, as :meth:`Cursor.close` does.
+        """
+        await self._executor.runner.abandon_all()
+        await self._executor.runner.transport.aclose()
 
     async def __aenter__(self) -> Self:
         return self
@@ -218,11 +323,23 @@ class Connection:
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        await self.close()
+        """Commit if the block succeeded and roll back if it raised, then close."""
+        try:
+            if exc_type is None:
+                await self.commit()
+            else:
+                await self.rollback()
+        finally:
+            await self.close()
 
 
 class _BaseCursor[T](ABC):
     """Executes statements and fetches their results as items of type ``T``.
+
+    Cursors of one autocommit connection can be used from concurrent tasks, one task per cursor.
+    If the task awaiting :meth:`execute` or a fetch is cancelled, for instance by
+    ``asyncio.timeout``, the query is cancelled on the Coordinator best-effort before the
+    ``CancelledError`` propagates.
 
     Attributes:
         arraysize: How many items :meth:`fetchmany` returns when no size is given.
@@ -230,23 +347,20 @@ class _BaseCursor[T](ABC):
 
     _keep_segments: ClassVar[bool] = False
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         connection: Connection,
-        coordinator: Coordinator,
-        session: SessionState,
-        transport: Transport,
+        executor: _Executor,
         stats_callback: StatsCallback | None = None,
         *,
         legacy_primitive_types: bool,
     ) -> None:
         self._connection = connection
-        self._coordinator = coordinator
-        self._session = session
-        self._transport = transport
+        self._executor = executor
         self._stats_callback = stats_callback
         self._legacy_primitive_types = legacy_primitive_types
         self._query: Query | None = None
+        self._earlier_update_count = 0
         self._closed = False
         self.arraysize = 1
 
@@ -264,10 +378,13 @@ class _BaseCursor[T](ABC):
 
     @property
     def rowcount(self) -> int:
-        """The number of rows an update statement changed, or -1 when Trino didn't report one."""
+        """The number of rows an update statement changed, or -1 when Trino didn't report one.
+
+        After :meth:`executemany`, the total over every parameter set.
+        """
         if self._query is None or self._query.update_count is None:
             return -1
-        return self._query.update_count
+        return self._earlier_update_count + self._query.update_count
 
     @property
     def query_id(self) -> str | None:
@@ -299,22 +416,49 @@ class _BaseCursor[T](ABC):
         """The kind of update statement executed, such as ``"INSERT"``, or ``None`` for queries."""
         return None if self._query is None else self._query.update_type
 
-    async def execute(self, operation: str) -> Self:
-        """Run a statement.
+    async def execute(self, operation: str, params: Sequence[object] | None = None) -> Self:
+        """Run a statement, binding ``params`` to its ``?`` placeholders.
 
-        Returns once its first rows are available, its columns are known, or it has finished,
-        so :attr:`description` is accurate afterwards.
+        Parameters are formatted as Trino literals and bound with ``EXECUTE IMMEDIATE``.
+        Returns once the first rows are available, the columns are known, or the statement
+        has finished, so :attr:`description` is accurate afterwards.
+
+        Args:
+            operation: The SQL statement, with a ``?`` for each parameter.
+            params: A list or tuple of values: ``None``, ``bool``, ``int``, ``float``,
+                ``Decimal``, ``str``, ``bytes``, ``date``, ``time``, ``datetime``,
+                ``uuid.UUID``, or a ``list`` (ARRAY), ``tuple`` (ROW) or ``dict`` (MAP) of them.
+                Empty or ``None`` runs ``operation`` as is.
+
+        Raises:
+            ProgrammingError: ``params`` is not a list or tuple.
+            NotSupportedError: A parameter has a type that can't be bound.
         """
-        self._check_open()
-        self._query = Query(
-            operation,
-            self._coordinator,
-            self._session,
-            self._stats_callback,
-            legacy_primitive_types=self._legacy_primitive_types,
-            keep_segments=self._keep_segments,
-        )
-        await submit(self._query, self._transport)
+        self._earlier_update_count = 0
+        await self._execute(operation, params)
+        return self
+
+    async def executemany(self, operation: str, seq_of_params: Sequence[Sequence[object]]) -> Self:
+        """Run a statement once per parameter set; :attr:`rowcount` is then their total.
+
+        Every set but the last must run an update statement, such as ``INSERT``. With no
+        sets, ``operation`` runs once as is.
+
+        Raises:
+            NotSupportedError: A statement other than the last returned no update type.
+        """
+        self._earlier_update_count = earlier = 0
+        for params in seq_of_params[:-1]:
+            query = await self._execute(operation, params)
+            await self.fetchall()
+            if query.update_type is None:
+                msg = "Query must return update type"
+                raise NotSupportedError(msg)
+            if query.update_count is not None:
+                earlier += query.update_count
+        last = seq_of_params[-1] if len(seq_of_params) > 0 else None
+        await self._execute(operation, last)
+        self._earlier_update_count = earlier
         return self
 
     async def fetchone(self) -> T | None:
@@ -327,7 +471,7 @@ class _BaseCursor[T](ABC):
         query = self._executed_query()
         size = self.arraysize if size is None else size
         items = self._take(query, size)
-        while len(items) < size and await fetch_more(query, self._transport):
+        while len(items) < size and await self._executor.fetch_more(query):
             items.extend(self._take(query, size - len(items)))
         return items
 
@@ -335,16 +479,34 @@ class _BaseCursor[T](ABC):
         """Return every remaining item."""
         query = self._executed_query()
         items = self._take(query, None)
-        while await fetch_more(query, self._transport):
+        while await self._executor.fetch_more(query):
             items.extend(self._take(query, None))
         return items
 
     @abstractmethod
     def _take(self, query: Query, limit: int | None) -> list[T]: ...
 
+    async def cancel(self) -> None:
+        """Cancel the running statement on the Coordinator; it then returns no more rows.
+
+        Does nothing if no statement is running.
+
+        Raises:
+            TrinoConnectionError: The Coordinator could not be reached or refused to cancel.
+        """
+        if self._query is not None:
+            await self._executor.runner.cancel(self._query)
+
     async def close(self) -> None:
-        """Close the cursor; any further use raises :class:`ProgrammingError`."""
+        """Close the cursor; any further use raises :class:`ProgrammingError`.
+
+        An unfinished query is cancelled on the Coordinator best-effort: a failure to cancel it
+        is logged to the ``asynctrino`` logger, not raised.
+        """
         self._closed = True
+        if self._query is not None:
+            self._executor.release(self._query)
+            await self._executor.runner.abandon(self._query)
 
     def __aiter__(self) -> Self:
         return self
@@ -365,6 +527,25 @@ class _BaseCursor[T](ABC):
         traceback: TracebackType | None,
     ) -> None:
         await self.close()
+
+    async def _execute(self, operation: str, params: Sequence[object] | None) -> Query:
+        self._check_open()
+        if params is not None and not isinstance(params, (list, tuple)):
+            msg = f"params must be a list or tuple of parameter values, not {type(params)}"
+            raise ProgrammingError(msg)
+        if params is not None and len(params) > 0:
+            operation = execute_immediate(operation, params)
+        query = Query(
+            operation,
+            self._executor.coordinator,
+            self._executor.session,
+            self._stats_callback,
+            legacy_primitive_types=self._legacy_primitive_types,
+            keep_segments=self._keep_segments,
+        )
+        self._query = query
+        await self._executor.submit(query)
+        return query
 
     def _check_open(self) -> None:
         if self._closed:
@@ -405,7 +586,8 @@ class SegmentCursor(_BaseCursor["Segment"]):
 
     @override
     def _take(self, query: Query, limit: int | None) -> list[Segment]:
-        return [Segment(segment, query, self._transport) for segment in query.take_segments(limit)]
+        transport = self._executor.runner.transport
+        return [Segment(segment, query, transport) for segment in query.take_segments(limit)]
 
 
 class Segment:
@@ -497,6 +679,7 @@ def connect(  # noqa: PLR0913
     auth: httpx2.Auth | None = None,
     allow_insecure_auth: bool = False,
     verify: bool | ssl.SSLContext = True,
+    isolation_level: IsolationLevel = IsolationLevel.AUTOCOMMIT,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     request_timeout: float | httpx2.Timeout = DEFAULT_REQUEST_TIMEOUT,
     http_client: httpx2.AsyncClient | None = None,
@@ -531,6 +714,10 @@ def connect(  # noqa: PLR0913
             system's store, ``False`` skips verification, and an ``ssl.SSLContext`` is used as
             is, so it can trust a private CA or present a client certificate. Ignored with
             ``http_client``.
+        isolation_level: :attr:`IsolationLevel.AUTOCOMMIT` runs every statement on its own.
+            Any other level runs statements in transactions at that level, started by the first
+            :meth:`Cursor.execute` and ended by :meth:`Connection.commit` or
+            :meth:`Connection.rollback`.
         max_attempts: How many times each request is attempted, including the first. Requests
             are retried on HTTP 429, 502, 503 and 504, on an empty 200 response to a statement
             request, and on connect, read and timeout errors. Waits honour ``Retry-After`` and
@@ -555,8 +742,8 @@ def connect(  # noqa: PLR0913
     Raises:
         TrinoAuthError: ``auth`` is set for an ``http`` Coordinator without
             ``allow_insecure_auth``.
-        ValueError: ``max_attempts`` is less than 1, ``http_scheme`` is unknown, an
-            ``extra_credential`` key is not ASCII or contains whitespace or ``=``, or
+        ValueError: ``max_attempts`` is less than 1, ``http_scheme`` or ``isolation_level`` is
+            unknown, an ``extra_credential`` key is not ASCII or contains whitespace or ``=``,
             ``http_headers`` would override a header asynctrino sends itself, or ``encoding``
             names an unsupported encoding.
         zoneinfo.ZoneInfoNotFoundError: ``timezone`` is not a known IANA time zone.
@@ -564,6 +751,8 @@ def connect(  # noqa: PLR0913
     coordinator = Coordinator.resolve(host, port, http_scheme)
     if auth is not None and not coordinator.uses_tls and not allow_insecure_auth:
         raise TrinoAuthError(_INSECURE_AUTH_MESSAGE)
+    isolation_level = IsolationLevel(isolation_level)
+    autocommit = isolation_level is IsolationLevel.AUTOCOMMIT
     return Connection(
         coordinator,
         ClientSession(
@@ -577,6 +766,7 @@ def connect(  # noqa: PLR0913
             extra_credential=tuple(extra_credential),
             timezone=session_timezone(timezone),
             http_headers={} if http_headers is None else dict(http_headers),
+            transaction_id=None if autocommit else NO_TRANSACTION,
             encoding=format_encoding(encoding),
         ),
         Transport(
@@ -587,4 +777,5 @@ def connect(  # noqa: PLR0913
             timeout=request_timeout,
         ),
         legacy_primitive_types=legacy_primitive_types,
+        isolation_level=isolation_level,
     )

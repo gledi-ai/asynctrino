@@ -68,10 +68,15 @@ class QueryStatus:
     update_count: int | None
 
 
+def check_status(response: HttpResponse) -> None:
+    """Raise if the Coordinator answered with an HTTP error status."""
+    if not 200 <= response.status_code < 300:  # noqa: PLR2004
+        raise _http_error(response)
+
+
 def parse_status(response: HttpResponse) -> QueryStatus:
     """Parse a Coordinator response, raising if it reports a failure."""
-    if not 200 <= response.status_code < 300:  # noqa: PLR2004
-        raise http_error(response)
+    check_status(response)
     if len(response.content.strip()) == 0:
         msg = f"received an empty response from the Coordinator (status {response.status_code})"
         raise TrinoConnectionError(msg)
@@ -112,8 +117,7 @@ def _query_error(error: dict[str, object], query_id: str | None) -> TrinoQueryEr
 _HTTP_ERRORS: dict[int, type[HttpError]] = {502: Http502Error, 503: Http503Error, 504: Http504Error}
 
 
-def http_error(response: HttpResponse) -> TrinoAuthError | HttpError:
-    """The error for a response whose HTTP status reports a failure."""
+def _http_error(response: HttpResponse) -> TrinoAuthError | HttpError:
     body = response.content.decode(errors="replace")
     if response.status_code == HTTPStatus.UNAUTHORIZED:
         return TrinoAuthError(f"error {response.status_code}: {body}")

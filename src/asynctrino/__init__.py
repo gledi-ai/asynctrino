@@ -3,7 +3,7 @@
 from importlib.metadata import version
 
 from asynctrino import auth, dbapi, exceptions
-from asynctrino.dbapi import connect
+from asynctrino.dbapi import IsolationLevel, connect
 from asynctrino.exceptions import (
     DatabaseError,
     DataError,
@@ -41,6 +41,7 @@ __all__ = [
     "IntegrityError",
     "InterfaceError",
     "InternalError",
+    "IsolationLevel",
     "NotSupportedError",
     "OperationalError",
     "ProgrammingError",
