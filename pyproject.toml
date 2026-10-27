@@ -69,6 +69,7 @@ vcs = "git"
 style = "pep440"
 pattern = "default"
 fallback-version = "0.0.0"
+bump = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/asynctrino"]
