@@ -1,7 +1,10 @@
+import io
 import math
+import struct
 import uuid
-from datetime import UTC, date, datetime, time, timedelta, timezone
+from datetime import UTC, date, datetime, time, timedelta, timezone, tzinfo
 from decimal import Decimal
+from typing import override
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -72,11 +75,11 @@ KOLKATA = ZoneInfo("Asia/Kolkata")
         ),
         (
             datetime(2020, 1, 2, 3, 4, 5, tzinfo=UTC),
-            "TIMESTAMP '2020-01-02 03:04:05.000000 UTC'",
+            "TIMESTAMP '2020-01-02 03:04:05.000000 +00:00'",
         ),
         (
             datetime(2020, 1, 2, 3, 4, 5, tzinfo=timezone(timedelta(hours=-3, minutes=-30))),
-            "TIMESTAMP '2020-01-02 03:04:05.000000 UTC-03:30'",
+            "TIMESTAMP '2020-01-02 03:04:05.000000 -03:30'",
         ),
         (time(3, 4, 5, 6), "TIME '03:04:05.000006'"),
         (time(23, 59, 59, 999999), "TIME '23:59:59.999999'"),
@@ -90,6 +93,34 @@ KOLKATA = ZoneInfo("Asia/Kolkata")
 )
 def test_dates_and_times_format_as_trino_literals(value: object, literal: str) -> None:
     assert format_parameter(value) == literal
+
+
+class Hostile(tzinfo):
+    """A fixed +01:00 zone whose name tries to break out of the literal."""
+
+    def utcoffset(self, _: datetime | None) -> timedelta:
+        return timedelta(hours=1)
+
+    def tzname(self, _: datetime | None) -> str:
+        return "x'; DROP TABLE t; --"
+
+    def dst(self, _: datetime | None) -> timedelta:
+        return timedelta()
+
+
+def test_a_custom_zone_is_rendered_as_its_offset_never_its_name() -> None:
+    literal = format_parameter(datetime(2020, 1, 2, 3, 4, 5, tzinfo=Hostile()))
+
+    assert literal == "TIMESTAMP '2020-01-02 03:04:05.000000 +01:00'"
+
+
+def test_a_zone_key_outside_the_safe_alphabet_is_not_supported() -> None:
+    header = b"TZif" + bytes(16) + struct.pack(">6l", 0, 0, 0, 0, 1, 4)
+    utc = header + struct.pack(">lBB", 0, 0, 0) + b"UTC\0"
+    zone = ZoneInfo.from_file(io.BytesIO(utc), key="UTC' OR '1'='1")
+
+    with pytest.raises(NotSupportedError, match="time zone"):
+        _ = format_parameter(datetime(2020, 1, 2, tzinfo=zone))
 
 
 @pytest.mark.parametrize(
@@ -133,3 +164,30 @@ def test_execute_immediate_quotes_the_statement_and_joins_the_parameters() -> No
     assert execute_immediate("SELECT ?, 'x' || ?", [None, "y'z"]) == (
         "EXECUTE IMMEDIATE 'SELECT ?, ''x'' || ?' USING NULL,'y''z'"
     )
+
+
+class SneakyStr(str):
+    __slots__ = ()
+
+    @override
+    def replace(self, *_: object, **__: object) -> str:
+        return str(self)
+
+    @override
+    def __format__(self, _: str) -> str:
+        return "' OR 1=1 --"
+
+
+class SneakyInt(int):
+    @override
+    def __format__(self, _: str) -> str:
+        return "1 OR 1=1"
+
+    @override
+    def __repr__(self) -> str:
+        return "1 OR 1=1"
+
+
+def test_subclasses_cannot_change_how_their_values_are_escaped() -> None:
+    assert format_parameter(SneakyStr("it's")) == "'it''s'"
+    assert format_parameter(SneakyInt(7)) == "7"

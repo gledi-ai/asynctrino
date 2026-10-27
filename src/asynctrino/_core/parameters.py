@@ -1,6 +1,7 @@
 """Query parameters bound by formatting them as Trino literals in an ``EXECUTE IMMEDIATE``."""
 
 import math
+import re
 import uuid
 from collections.abc import Sequence
 from datetime import date, datetime, time, timedelta, tzinfo
@@ -9,6 +10,8 @@ from functools import singledispatch
 from zoneinfo import ZoneInfo
 
 from asynctrino.exceptions import NotSupportedError
+
+_ZONE_PATTERN = re.compile(r"[A-Za-z0-9_+\-/:]+")
 
 
 def execute_immediate(operation: str, parameters: Sequence[object]) -> str:
@@ -39,7 +42,7 @@ def _format_boolean(value: bool) -> str:  # noqa: FBT001
 
 @format_parameter.register
 def _format_integer(value: int) -> str:
-    return f"{value:d}"
+    return int.__repr__(value)
 
 
 @format_parameter.register
@@ -48,17 +51,17 @@ def _format_double(value: float) -> str:
         return "nan()"
     if math.isinf(value):
         return "infinity()" if value > 0 else "-infinity()"
-    return f"DOUBLE '{value}'"
+    return f"DOUBLE '{float.__repr__(value)}'"
 
 
 @format_parameter.register
 def _format_decimal(value: Decimal) -> str:
-    return f"DECIMAL '{value:f}'"
+    return f"DECIMAL '{Decimal.__format__(value, 'f')}'"
 
 
 @format_parameter.register
 def _quote(value: str) -> str:
-    escaped = value.replace("'", "''")
+    escaped = str.replace(value, "'", "''")
     return f"'{escaped}'"
 
 
@@ -71,31 +74,32 @@ def _format_varbinary(value: bytes | bytearray | memoryview) -> str:
 
 @format_parameter.register
 def _format_date(value: date) -> str:
-    return f"DATE '{value:%Y-%m-%d}'"
+    return f"DATE '{date.strftime(value, '%Y-%m-%d')}'"
 
 
 @format_parameter.register
 def _format_timestamp(value: datetime) -> str:
-    text = f"{value:%Y-%m-%d %H:%M:%S.%f}"
+    text = datetime.strftime(value, "%Y-%m-%d %H:%M:%S.%f")
     zone = value.tzinfo
-    if zone is None:
+    offset = value.utcoffset()
+    if zone is None or offset is None:
         return f"TIMESTAMP '{text}'"
-    name = zone.key if isinstance(zone, ZoneInfo) else zone.tzname(value)
-    return f"TIMESTAMP '{text} {name}'"
+    name = zone.key if isinstance(zone, ZoneInfo) else _format_offset(offset)
+    return f"TIMESTAMP '{text} {_checked_zone(name)}'"
 
 
 @format_parameter.register
 def _format_time(value: time) -> str:
-    text = f"{value:%H:%M:%S.%f}"
+    text = time.strftime(value, "%H:%M:%S.%f")
     zone = value.tzinfo
     if zone is None:
         return f"TIME '{text}'"
-    return f"TIME '{text} {_format_offset(_current_offset(zone))}'"
+    return f"TIME '{text} {_checked_zone(_format_offset(_current_offset(zone)))}'"
 
 
 @format_parameter.register
 def _format_uuid(value: uuid.UUID) -> str:
-    return f"UUID '{value}'"
+    return f"UUID '{uuid.UUID(str(value))}'"
 
 
 @format_parameter.register(list)
@@ -131,3 +135,10 @@ def _format_offset(offset: timedelta) -> str:
     sign = "-" if offset < timedelta() else "+"
     hours, minutes = divmod(abs(offset) // timedelta(minutes=1), 60)
     return f"{sign}{hours:02d}:{minutes:02d}"
+
+
+def _checked_zone(name: str) -> str:
+    if _ZONE_PATTERN.fullmatch(name) is None:
+        msg = f"Query parameter has an unsupported time zone {name!r}."
+        raise NotSupportedError(msg)
+    return name
