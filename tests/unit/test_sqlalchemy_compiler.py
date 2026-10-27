@@ -1,5 +1,7 @@
 """SQLAlchemy statements compiled to Trino SQL, with no I/O."""
 
+from decimal import Decimal
+
 import pytest
 from sqlalchemy import (
     ARRAY,
@@ -7,6 +9,7 @@ from sqlalchemy import (
     BLOB,
     NCHAR,
     NVARCHAR,
+    REAL,
     Column,
     DateTime,
     Double,
@@ -33,7 +36,7 @@ from sqlalchemy import (
 from sqlalchemy.exc import CompileError, SAWarning
 from sqlalchemy.schema import CreateTable
 from sqlalchemy.sql import column, table
-from sqlalchemy.sql.elements import Over
+from sqlalchemy.sql.elements import ColumnElement, Over
 
 from asynctrino.sqlalchemy import (
     DOUBLE,
@@ -234,6 +237,28 @@ def test_varbinary_literal_binds_rejects_non_bytes(dialect: TrinoDialect) -> Non
 
     with pytest.raises(CompileError):
         _ = expression.compile(dialect=dialect, compile_kwargs={"literal_binds": True})
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [
+        (literal(1.5), "DOUBLE '1.5'"),
+        (literal(2.5, Float), "DOUBLE '2.5'"),
+        (literal(0.1, REAL), "DOUBLE '0.1'"),
+        (literal(Decimal("1.25"), Double), "DOUBLE '1.25'"),
+        (literal(3, DOUBLE), "DOUBLE '3.0'"),
+        (literal(float("nan")), "nan()"),
+        (literal(float("-inf")), "-infinity()"),
+        (literal(Decimal("1.5")), "1.5"),
+    ],
+    ids=repr,
+)
+def test_float_literals_render_as_double(
+    dialect: TrinoDialect, expression: ColumnElement[object], expected: str
+) -> None:
+    query = expression.compile(dialect=dialect, compile_kwargs={"literal_binds": True})
+
+    assert str(query) == expected
 
 
 @pytest.mark.parametrize("type_", [MAP(String, Integer), ROW([("a", Integer)])])

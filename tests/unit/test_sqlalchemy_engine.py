@@ -1,13 +1,14 @@
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from decimal import Decimal
 from importlib.metadata import version
 from types import MappingProxyType
 from typing import Protocol
 
 import httpx2
 import pytest
-from sqlalchemy import Column, MetaData, Table, exc, select, text
+from sqlalchemy import Column, Double, Float, MetaData, Table, exc, literal, select, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from asynctrino.auth import BasicAuthentication
@@ -184,6 +185,22 @@ async def test_json_path_with_an_unsupported_key_is_refused() -> None:
             _ = await conn.execute(select(documents.c.data[1.5]))
 
     assert [r for r in coordinator.requests if r.method == "POST"] == []
+
+
+async def test_values_bound_to_float_types_are_sent_as_doubles() -> None:
+    coordinator = one_row_coordinator()
+    async with connection_to(coordinator) as conn:
+        _ = await conn.execute(
+            select(
+                literal(Decimal("1.25"), Float),
+                literal(2, Double),
+                literal(0.5),
+                literal(None, Float),
+            )
+        )
+
+    [post] = [r for r in coordinator.requests if r.method == "POST"]
+    assert post.content.decode().endswith("USING DOUBLE '1.25',DOUBLE '2.0',DOUBLE '0.5',NULL")
 
 
 def paged_coordinator() -> FakeCoordinator:
