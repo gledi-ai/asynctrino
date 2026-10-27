@@ -72,7 +72,8 @@ dev/up: venv lock sync ## Set up the development environment, WARNING: upgrades 
 
 .PHONY: build clean
 
-build: ## Build the sdist and wheel
+build: ## Build the sdist and wheel into a clean dist/
+	rm -rf dist/
 	$(UV) build
 
 clean: ## Remove build artifacts and caches
@@ -80,6 +81,22 @@ clean: ## Remove build artifacts and caches
 	rm -rf .pytest_cache/ .ruff_cache/ .nox/ .coverage coverage*.xml junit*.xml
 	find . -path ./.venv -prune -o -type d -name '*.egg-info' -print -exec rm -rf {} +
 	find . -path ./.venv -prune -o -type d -name __pycache__ -print -exec rm -rf {} +
+
+
+##@ Release
+
+.PHONY: changelog release/notes dist/check
+
+GIT_CLIFF := git-cliff@2.14.2
+
+changelog: ## Regenerate CHANGELOG.md; VERSION=vX.Y.Z files unreleased commits under that version
+	$(UVX) $(GIT_CLIFF) $(if $(VERSION),--tag $(VERSION)) --output CHANGELOG.md
+
+release/notes: ## Print the changelog section of the release tagged at HEAD
+	$(UVX) --quiet $(GIT_CLIFF) --current --strip all
+
+dist/check: build ## Build, then install and import the wheel and sdist on Python 3.14 and 3.15
+	$(UV) run --locked nox --session dist
 
 
 ##@ Testing

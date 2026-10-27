@@ -1,6 +1,7 @@
-"""Nox sessions for linting, formatting, type checking, and the test matrix."""
+"""Nox sessions for linting, formatting, type checking, the test matrix, and built packages."""
 
 import os
+from pathlib import Path
 
 import nox
 from nox_uv import session
@@ -10,6 +11,19 @@ nox.options.sessions = ["lint", "format", "typecheck", "test"]
 
 PYTHONS = ["3.14", "3.15"]
 SOURCES = ["src", "tests", "noxfile.py"]
+DIST_CHECK = """
+from importlib.resources import files
+
+from sqlalchemy.ext.asyncio import create_async_engine
+
+import asynctrino
+import asynctrino.sqlalchemy
+
+assert files("asynctrino").joinpath("py.typed").is_file()
+engine = create_async_engine("asynctrino://me@localhost/tpch")
+assert (engine.dialect.name, engine.dialect.driver) == ("trino", "asynctrino")
+print("asynctrino", asynctrino.__version__)
+"""
 
 
 @session(uv_groups=["dev"])
@@ -45,3 +59,15 @@ def test(s: nox.Session) -> None:
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary is not None:
         _ = s.run("bash", "-c", f'coverage report --format=markdown >> "{summary}"', external=True)
+
+
+@nox.session(python=PYTHONS, venv_backend="uv")
+def dist(s: nox.Session) -> None:
+    """Install each wheel and sdist in ``dist/`` with the sqlalchemy extra, then import it."""
+    artifacts = sorted(Path("dist").glob("asynctrino-*"))
+    if len(artifacts) == 0:
+        s.error("dist/ holds no asynctrino wheel or sdist; run `uv build` first")
+    for artifact in artifacts:
+        s.log(f"Checking {artifact.name}")
+        s.install("--reinstall", f"asynctrino[sqlalchemy] @ {artifact.resolve().as_uri()}")
+        _ = s.run("python", "-I", "-c", DIST_CHECK)
