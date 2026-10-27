@@ -13,11 +13,13 @@ from sqlalchemy.engine.interfaces import (
 )
 from sqlalchemy.engine.interfaces import IsolationLevel as SQLAlchemyIsolationLevel
 from sqlalchemy.engine.url import URL
+from sqlalchemy.pool import PoolProxiedConnection
 from sqlalchemy.util import VersionInfo, parse_version_string
 
 import asynctrino
 from asynctrino.auth import BasicAuthentication, JWTAuthentication
 from asynctrino.dbapi import IsolationLevel
+from asynctrino.exceptions import TrinoConnectionError
 from asynctrino.sqlalchemy._adapter import AsyncAdaptConnection, AsyncAdaptDBAPI
 from asynctrino.sqlalchemy._url import DEFAULT_SOURCE
 
@@ -49,6 +51,7 @@ class TrinoDialect(DefaultDialect):
     is_async = True
     supports_statement_cache = False
     supports_server_side_cursors = True
+    has_terminate = True
     execution_ctx_cls = TrinoExecutionContext
 
     @override
@@ -59,6 +62,20 @@ class TrinoDialect(DefaultDialect):
     @override
     def retrieve_dbapi_version(self, dbapi: DBAPIModule) -> VersionInfo:
         return parse_version_string(asynctrino.__version__)
+
+    @override
+    def do_terminate(self, dbapi_connection: DBAPIConnection) -> None:
+        _adapted(dbapi_connection).terminate()
+
+    @override
+    def is_disconnect(
+        self,
+        e: DBAPIModule.Error,
+        connection: PoolProxiedConnection | DBAPIConnection | None,
+        cursor: DBAPICursor | None,
+    ) -> bool:
+        """Whether ``e`` means the Coordinator can't be reached, so the connection is replaced."""
+        return isinstance(e, TrinoConnectionError)
 
     @override
     def get_isolation_level_values(

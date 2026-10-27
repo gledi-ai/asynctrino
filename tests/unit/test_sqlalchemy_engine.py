@@ -1,5 +1,6 @@
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from importlib.metadata import version
 from types import MappingProxyType
 from typing import Protocol
@@ -223,3 +224,53 @@ async def test_setting_the_isolation_level_ends_an_open_transaction() -> None:
         ("ROLLBACK", "tx-1"),
         ("SELECT 2", None),
     ]
+
+
+@dataclass
+class FlakyCoordinator:
+    """Finishes every statement with one row, but refuses the next connection when told to."""
+
+    refuse_next: bool = False
+    statements: list[str] = field(default_factory=list[str])
+
+    def handler(self, request: httpx2.Request) -> httpx2.Response:
+        if request.method != "POST":
+            return httpx2.Response(204)
+        self.statements.append(request.content.decode())
+        if self.refuse_next:
+            self.refuse_next = False
+            msg = "connection refused"
+            raise httpx2.ConnectError(msg, request=request)
+        [page] = statement_pages(columns=[column("_col0", "integer")], batches=[], queued_pages=0)
+        page["data"] = [[1]]
+        return httpx2.Response(200, json=page)
+
+    def client(self) -> httpx2.AsyncClient:
+        return httpx2.AsyncClient(transport=httpx2.MockTransport(self.handler))
+
+
+async def test_pre_ping_replaces_a_connection_that_lost_the_coordinator() -> None:
+    coordinator = FlakyCoordinator()
+    no_retries: dict[str, object] = {"max_attempts": 1}
+    async with (
+        coordinator.client() as client,
+        engine_for(client, connect_args=no_retries, pool_pre_ping=True) as engine,
+    ):
+        _ = await query(engine, "SELECT 'warm'")
+        coordinator.refuse_next = True
+        rows = await query(engine, "SELECT 'after'")
+
+    assert rows == [(1,)]
+    assert coordinator.statements == ["SELECT 'warm'", "SELECT 1", "SELECT 'after'"]
+
+
+async def test_invalidating_a_connection_terminates_its_running_query() -> None:
+    coordinator = paged_coordinator()
+    async with connection_to(coordinator) as conn:
+        result = await conn.stream(text("SELECT x"))
+        _ = await result.fetchone()
+        await conn.invalidate()
+
+        assert conn.invalidated
+    [delete] = [r for r in coordinator.requests if r.method == "DELETE"]
+    assert delete.url.path.startswith("/v1/statement/executing/")

@@ -2,7 +2,7 @@
 
 from collections.abc import Awaitable, Callable
 from types import ModuleType
-from typing import Any, cast
+from typing import Any, cast, override
 
 from sqlalchemy.connectors.asyncio import (
     AsyncAdapt_dbapi_connection,
@@ -64,6 +64,19 @@ class AsyncAdaptConnection(AsyncAdapt_terminate, AsyncAdapt_dbapi_connection):
         """Roll back any open transaction, then run the next statements at ``level``."""
         self.rollback()
         self._trino.isolation_level = level
+
+    @override
+    async def _terminate_graceful_close(self) -> None:
+        """Cancel the connection's unfinished queries and close its HTTP client."""
+        await self._trino.close()
+
+    @override
+    def _terminate_force_close(self) -> None:
+        """Drop the connection without I/O, as garbage collection does.
+
+        Trino keeps no session on a connection, so there is nothing to tear down; unfinished
+        queries are left for the Coordinator to abandon once their ``nextUri`` goes unpolled.
+        """
 
 
 class AsyncAdaptDBAPI(AsyncAdapt_dbapi_module):
