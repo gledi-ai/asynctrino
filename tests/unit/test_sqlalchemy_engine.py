@@ -118,6 +118,16 @@ async def test_url_options_reach_the_coordinator() -> None:
     assert post.headers["X-Trino-Time-Zone"] == "Europe/Brussels"
 
 
+async def test_url_encoding_selects_the_spooling_protocol() -> None:
+    coordinator = one_row_coordinator()
+    url = URL("coordinator", user="alice", encoding=["json+zstd", "json"])
+    async with coordinator.client() as client, engine_for(client, url) as engine:
+        _ = await query(engine, "SELECT 1")
+
+    [post] = [r for r in coordinator.requests if r.method == "POST"]
+    assert post.headers["X-Trino-Query-Data-Encoding"] == "json+zstd,json"
+
+
 async def test_connect_args_override_url_options() -> None:
     coordinator = one_row_coordinator()
     url = "asynctrino://alice@coordinator:8080/tpch?source=from-url"
