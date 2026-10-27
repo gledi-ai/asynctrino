@@ -1,13 +1,22 @@
 import socket
+from datetime import date
+from decimal import Decimal
 from typing import Literal
+from zoneinfo import ZoneInfoNotFoundError
 
 import httpx2
 import pytest
+import tzlocal
 
 import asynctrino.dbapi
 from asynctrino.dbapi import connect
-from asynctrino.exceptions import ProgrammingError, TrinoConnectionError, TrinoQueryError
-from tests.unit.coordinator import FakeCoordinator, column, statement_pages
+from asynctrino.exceptions import (
+    ProgrammingError,
+    TrinoConnectionError,
+    TrinoDataError,
+    TrinoQueryError,
+)
+from tests.unit.coordinator import JSON, FakeCoordinator, column, statement_pages
 
 
 async def test_select_1_returns_its_single_row() -> None:
@@ -256,3 +265,131 @@ def test_module_declares_pep_249_globals() -> None:
     assert asynctrino.dbapi.apilevel == "2.0"
     assert asynctrino.dbapi.threadsafety == 1
     assert asynctrino.dbapi.paramstyle == "qmark"
+
+
+async def test_every_request_advertises_the_client_capabilities() -> None:
+    coordinator = FakeCoordinator(
+        statement_pages(columns=[column("_col0", "integer")], batches=[[[1]]])
+    )
+    async with coordinator.client() as client:
+        cur = connect(host="coordinator", http_client=client).cursor()
+        await cur.execute("SELECT 1")
+        await cur.fetchall()
+
+    assert len(coordinator.requests) > 1
+    for request in coordinator.requests:
+        assert (
+            request.headers["X-Trino-Client-Capabilities"]
+            == "NUMBER,PARAMETRIC_DATETIME,SESSION_AUTHORIZATION"
+        )
+
+
+async def test_session_time_zone_defaults_to_the_local_zone() -> None:
+    coordinator = FakeCoordinator(statement_pages(columns=None, batches=[]))
+    async with coordinator.client() as client:
+        await connect(host="coordinator", http_client=client).cursor().execute("SELECT 1")
+
+    for request in coordinator.requests:
+        assert request.headers["X-Trino-Time-Zone"] == tzlocal.get_localzone_name()
+
+
+async def test_session_time_zone_can_be_overridden() -> None:
+    coordinator = FakeCoordinator(statement_pages(columns=None, batches=[]))
+    async with coordinator.client() as client:
+        conn = connect(host="coordinator", timezone="Europe/Brussels", http_client=client)
+        await conn.cursor().execute("SELECT 1")
+
+    for request in coordinator.requests:
+        assert request.headers["X-Trino-Time-Zone"] == "Europe/Brussels"
+
+
+def test_connect_rejects_an_unknown_time_zone() -> None:
+    with pytest.raises(ZoneInfoNotFoundError):
+        _ = connect(host="coordinator", timezone="INVALID_TIMEZONE")
+
+
+def decimal_and_date_rows() -> FakeCoordinator:
+    return FakeCoordinator(
+        statement_pages(
+            columns=[column("d", "decimal", 3, 2), column("day", "date")],
+            batches=[[["1.20", "2001-08-22"]], [[None, None]]],
+        )
+    )
+
+
+async def test_values_are_mapped_to_python_types() -> None:
+    coordinator = decimal_and_date_rows()
+    async with coordinator.client() as client:
+        cur = connect(host="coordinator", http_client=client).cursor()
+        await cur.execute("SELECT d, day FROM t")
+
+        assert await cur.fetchall() == [[Decimal("1.20"), date(2001, 8, 22)], [None, None]]
+
+
+@pytest.mark.parametrize(
+    ("on_connection", "on_cursor", "legacy"),
+    [
+        (False, None, False),
+        (True, None, True),
+        (True, False, False),
+        (False, True, True),
+    ],
+)
+async def test_legacy_primitive_types_returns_values_as_sent(
+    *, on_connection: bool, on_cursor: bool | None, legacy: bool
+) -> None:
+    coordinator = decimal_and_date_rows()
+    async with coordinator.client() as client:
+        conn = connect(host="coordinator", legacy_primitive_types=on_connection, http_client=client)
+        cur = conn.cursor(legacy_primitive_types=on_cursor)
+        await cur.execute("SELECT d, day FROM t")
+        rows = await cur.fetchall()
+
+    expected = ["1.20", "2001-08-22"] if legacy else [Decimal("1.20"), date(2001, 8, 22)]
+    assert rows == [expected, [None, None]]
+
+
+async def test_a_value_python_cannot_represent_raises_trino_data_error() -> None:
+    coordinator = FakeCoordinator(
+        statement_pages(columns=[column("day", "date")], batches=[[["-2001-08-22"]]])
+    )
+    async with coordinator.client() as client:
+        cur = connect(host="coordinator", http_client=client).cursor()
+
+        with pytest.raises(TrinoDataError, match="-2001-08-22"):
+            await cur.execute("SELECT DATE '-2001-08-22'")
+
+
+async def test_description_reports_length_precision_and_scale_by_type() -> None:
+    def described(name: str, type_code: str, raw_type: str, *arguments: int) -> JSON:
+        described_column = column(name, raw_type, *arguments)
+        described_column["type"] = type_code
+        return described_column
+
+    columns = [
+        described("d", "decimal(38, 0)", "decimal", 38, 0),
+        described("c", "char(5)", "char", 5),
+        described("v", "varchar", "varchar", 2147483647),
+        described("t", "time(3)", "time", 3),
+        described("tz", "time(9) with time zone", "time with time zone", 9),
+        described("ts", "timestamp(6)", "timestamp", 6),
+        described("tstz", "timestamp(3) with time zone", "timestamp with time zone", 3),
+        described("day", "date", "date"),
+        described("n", "number", "number"),
+    ]
+    coordinator = FakeCoordinator(statement_pages(columns=columns, batches=[]))
+    async with coordinator.client() as client:
+        cur = connect(host="coordinator", http_client=client).cursor()
+        await cur.execute("SELECT ...")
+
+    assert cur.description == [
+        ("d", "decimal(38, 0)", None, None, 38, 0, None),
+        ("c", "char(5)", None, 5, None, None, None),
+        ("v", "varchar", None, 2147483647, None, None, None),
+        ("t", "time(3)", None, None, 3, None, None),
+        ("tz", "time(9) with time zone", None, None, 9, None, None),
+        ("ts", "timestamp(6)", None, None, 6, None, None),
+        ("tstz", "timestamp(3) with time zone", None, None, 3, None, None),
+        ("day", "date", None, None, None, None, None),
+        ("n", "number", None, None, None, None, None),
+    ]
