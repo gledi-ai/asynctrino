@@ -13,7 +13,12 @@ VENV_DIR := $(CURDIR)/.venv
 VENV_PROMPT := $(PROJECTNAME)
 PY := $(VENV_DIR)/bin/python
 
-ARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
+# Goals after a test target are its pytest arguments (make test tests/unit), as is ARGS=...
+ARG_GOALS := test unit test/unit integration test/integration cov test/cov cov/report
+ifneq ($(filter $(firstword $(MAKECMDGOALS)),$(ARG_GOALS)),)
+EXTRA_GOALS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
+endif
+ARGS ?= $(EXTRA_GOALS)
 
 
 ##@ General
@@ -103,7 +108,7 @@ dist/check: build ## Build, then install and import the wheel and sdist on Pytho
 
 .PHONY: test unit test/unit integration test/integration cov test/cov cov/report test/matrix
 
-test: ## Run all tests on the current interpreter (pass paths/args: make test tests/unit)
+test: ## Run all tests on the current interpreter (pass args: make test tests/unit, or ARGS=...)
 	$(UV) run --locked pytest $(ARGS)
 
 unit test/unit: ## Run unit tests only
@@ -155,9 +160,8 @@ hooks: ## Run pre-commit on all files
 	$(UVX) prek run --all-files
 
 
-# Extra goals are arguments for the first one (make test tests/unit); never build them.
-ifneq ($(ARGS),)
-.PHONY: $(ARGS)
-$(ARGS):
+ifneq ($(EXTRA_GOALS),)
+.PHONY: $(EXTRA_GOALS)
+$(EXTRA_GOALS):
 	@:
 endif
