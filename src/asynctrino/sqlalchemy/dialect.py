@@ -1,7 +1,7 @@
 """The ``asynctrino://`` SQLAlchemy dialect for Trino."""
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import cast, override
 
 from sqlalchemy.engine.default import DefaultDialect, DefaultExecutionContext
@@ -16,6 +16,8 @@ from sqlalchemy.engine.url import URL
 from sqlalchemy.pool import PoolProxiedConnection
 from sqlalchemy.sql import sqltypes
 from sqlalchemy.sql.base import DialectKWArgs
+from sqlalchemy.sql.ddl import CreateTableAs
+from sqlalchemy.sql.schema import Table
 from sqlalchemy.util import VersionInfo, parse_version_string
 
 import asynctrino
@@ -42,6 +44,10 @@ _JSON_QUERY_OPTIONS = (
     "verify",
     "allow_insecure_auth",
 )
+
+
+_TABLE_ARGUMENTS: Mapping[str, None] = {"catalog": None, "*": None}
+_CREATE_TABLE_AS_ARGUMENTS: Mapping[str, None] = {"*": None}
 
 
 class TrinoExecutionContext(DefaultExecutionContext):
@@ -72,6 +78,11 @@ class TrinoDialect(DefaultDialect):
         sqltypes.JSON.JSONPathType: JSONPathType,
         sqltypes._Binary: VARBINARY,  # noqa: SLF001
     }
+
+    construct_arguments = [  # noqa: RUF012
+        (Table, _TABLE_ARGUMENTS),
+        (CreateTableAs, _CREATE_TABLE_AS_ARGUMENTS),
+    ]
 
     supports_native_enum = False
     supports_native_boolean = True

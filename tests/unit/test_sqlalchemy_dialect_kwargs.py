@@ -19,6 +19,6 @@ def other_trino_dialect_installed() -> Generator[None]:
 
 @pytest.mark.usefixtures("other_trino_dialect_installed")
 def test_trino_keyword_arguments_are_accepted_without_loading_another_dialect() -> None:
-    table = Table("t", MetaData(), Column("x", Integer), trino_with={"format": "'ORC'"})
+    table = Table("t", MetaData(), Column("x", Integer), trino_format="ORC")
 
-    assert table.dialect_kwargs["trino_with"] == {"format": "'ORC'"}
+    assert table.dialect_kwargs["trino_format"] == "ORC"

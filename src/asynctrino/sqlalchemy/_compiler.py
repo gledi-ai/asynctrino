@@ -4,10 +4,12 @@ from collections.abc import Mapping
 from decimal import Decimal
 from typing import Any, override
 
-from sqlalchemy import util
+from sqlalchemy import exc, util
 from sqlalchemy.sql import compiler, sqltypes
 from sqlalchemy.sql._typing import _ColumnExpressionArgument, _ColumnExpressionOrLiteralArgument
+from sqlalchemy.sql.base import DialectKWArgs
 from sqlalchemy.sql.compiler import _ResultMapAppender
+from sqlalchemy.sql.ddl import CreateTableAs, _TableViaSelect
 from sqlalchemy.sql.elements import BinaryExpression, FrameClause, TryCast
 from sqlalchemy.sql.functions import Function, ReturnTypeFromArgs
 from sqlalchemy.sql.operators import OperatorType
@@ -20,6 +22,8 @@ from sqlalchemy.sql.schema import (
 from sqlalchemy.sql.selectable import Alias, FromClause, GenerativeSelect, TableClause
 from sqlalchemy.sql.visitors import InternalTraversal, _TraverseInternalsType
 
+from asynctrino._core.parameters import format_parameter
+from asynctrino.exceptions import NotSupportedError
 from asynctrino.sqlalchemy._types import MAP, ROW, TIME, TIMESTAMP
 
 RESERVED_WORDS = frozenset(
@@ -242,7 +246,38 @@ class TrinoSQLCompiler(compiler.SQLCompiler):
 
 
 class TrinoDDLCompiler(compiler.DDLCompiler):
-    """Renders DDL for Trino, which has no table constraints."""
+    """Renders DDL for Trino, which has no table constraints.
+
+    ``trino_<property>=value`` arguments of a :class:`~sqlalchemy.schema.Table` or
+    :class:`~sqlalchemy.schema.CreateTableAs`, other than ``trino_catalog``, become table
+    properties: ``CREATE TABLE ... WITH (property = value, ...)``.
+    """
+
+    @override
+    def post_create_table(self, table: Table) -> str:
+        properties = self._table_properties(table)
+        return "" if properties == "" else f"\nWITH ({properties})"
+
+    @override
+    def create_table_select_suffixes(
+        self, element: _TableViaSelect, type_: str, **kw: object
+    ) -> str:
+        properties = self._table_properties(element) if isinstance(element, CreateTableAs) else ""
+        return "" if properties == "" else f"WITH ({properties})"
+
+    def _table_properties(self, element: DialectKWArgs) -> str:
+        properties: list[str] = []
+        for argument, value in element.dialect_kwargs.items():
+            name = argument.removeprefix(_DIALECT_PREFIX)
+            if name in {argument, "catalog"}:
+                continue
+            try:
+                literal = format_parameter(value)
+            except NotSupportedError as e:
+                msg = f"Table property {name!r} has no Trino literal: {value!r}"
+                raise exc.CompileError(msg) from e
+            properties.append(f"{self.preparer.quote(name)} = {literal}")
+        return ", ".join(properties)
 
     @override
     def visit_primary_key_constraint(  # pyrefly: ignore[bad-override]
@@ -261,6 +296,9 @@ class TrinoDDLCompiler(compiler.DDLCompiler):
         self, constraint: UniqueConstraint, **kw: object
     ) -> str | None:
         return _ignored_constraint("UNIQUE")
+
+
+_DIALECT_PREFIX = "trino_"
 
 
 def _ignored_constraint(kind: str) -> None:

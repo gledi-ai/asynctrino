@@ -11,6 +11,7 @@ from sqlalchemy import (
     NVARCHAR,
     REAL,
     Column,
+    CreateTableAs,
     DateTime,
     Double,
     Float,
@@ -33,7 +34,7 @@ from sqlalchemy import (
     try_cast,
     types,
 )
-from sqlalchemy.exc import CompileError, SAWarning
+from sqlalchemy.exc import ArgumentError, CompileError, SAWarning
 from sqlalchemy.schema import CreateTable
 from sqlalchemy.sql import column, table
 from sqlalchemy.sql.elements import ColumnElement, Over
@@ -123,6 +124,57 @@ def test_catalogs_create_table(dialect: TrinoDialect) -> None:
     query = CreateTable(table_with_catalog).compile(dialect=dialect)
 
     assert str(query) == '\nCREATE TABLE "other".default."table" (\n\tid INTEGER\n)\n\n'
+
+
+def test_create_table_with_table_properties(dialect: TrinoDialect) -> None:
+    events = Table(
+        "events",
+        MetaData(),
+        Column("id", Integer),
+        Column("region", String),
+        trino_catalog="hive",
+        trino_format="ORC",
+        trino_partitioned_by=["region"],
+        trino_bucket_count=8,
+        trino_transactional=False,
+        trino_comment_text="it's",
+    )
+
+    query = CreateTable(events).compile(dialect=dialect)
+
+    assert str(query) == (
+        '\nCREATE TABLE "hive".events (\n\tid INTEGER, \n\tregion VARCHAR\n)'
+        "\nWITH (format = 'ORC', partitioned_by = ARRAY['region'], bucket_count = 8, "
+        "transactional = false, comment_text = 'it''s')\n\n"
+    )
+
+
+def test_create_table_as_with_table_properties(dialect: TrinoDialect) -> None:
+    statement = CreateTableAs(
+        select(table_without_catalog.c.id).where(table_without_catalog.c.id > 1),
+        "ids",
+        schema="default",
+        trino_format="PARQUET",
+    )
+
+    query = statement.compile(dialect=dialect)
+
+    assert str(query) == (
+        "CREATE TABLE default.ids WITH (format = 'PARQUET') AS "
+        'SELECT "table".id \nFROM "table" \nWHERE "table".id > 1'
+    )
+
+
+def test_table_property_without_a_trino_literal_is_rejected(dialect: TrinoDialect) -> None:
+    events = Table("events", MetaData(), Column("id", Integer), trino_format=object())
+
+    with pytest.raises(CompileError, match="format"):
+        _ = CreateTable(events).compile(dialect=dialect)
+
+
+def test_trino_arguments_are_only_accepted_by_tables() -> None:
+    with pytest.raises(ArgumentError, match="trino_format"):
+        _ = Column("id", Integer, trino_format="ORC")
 
 
 @pytest.mark.parametrize("function", ["first_value", "last_value", "nth_value", "lead", "lag"])
