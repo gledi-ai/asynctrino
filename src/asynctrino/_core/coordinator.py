@@ -1,4 +1,4 @@
-"""Where the Coordinator lives and what the client tells it about the session."""
+"""Where the Coordinator lives."""
 
 from dataclasses import dataclass
 from typing import Literal
@@ -8,7 +8,6 @@ type HttpScheme = Literal["http", "https"]
 
 DEFAULT_PORT = 8080
 DEFAULT_TLS_PORT = 443
-DEFAULT_SOURCE = "asynctrino"
 STATEMENT_PATH = "/v1/statement"
 
 
@@ -45,23 +44,3 @@ class Coordinator:
     def statement_url(self) -> str:
         """The URL statements are POSTed to."""
         return f"{self.base_url}{STATEMENT_PATH}"
-
-
-@dataclass(frozen=True, slots=True)
-class ClientSession:
-    """The session the client announces to the Coordinator with every statement."""
-
-    user: str | None
-    source: str = DEFAULT_SOURCE
-    catalog: str | None = None
-    schema: str | None = None
-
-    def headers(self) -> dict[str, str]:
-        """The ``X-Trino-*`` headers describing this session."""
-        values = {
-            "X-Trino-User": self.user,
-            "X-Trino-Source": self.source,
-            "X-Trino-Catalog": self.catalog,
-            "X-Trino-Schema": self.schema,
-        }
-        return {name: value for name, value in values.items() if value is not None}

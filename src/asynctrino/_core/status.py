@@ -34,6 +34,9 @@ class _QueryResults(TypedDict):
     columns: NotRequired[list[Column]]
     data: NotRequired[list[Row]]
     error: NotRequired[dict[str, object]]
+    warnings: NotRequired[list[dict[str, object]]]
+    updateType: NotRequired[str]
+    updateCount: NotRequired[int]
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +49,9 @@ class QueryStatus:
     stats: dict[str, object]
     columns: list[Column] | None
     rows: list[Row]
+    warnings: list[dict[str, object]]
+    update_type: str | None
+    update_count: int | None
 
 
 def parse_status(response: HttpResponse) -> QueryStatus:
@@ -64,4 +70,7 @@ def parse_status(response: HttpResponse) -> QueryStatus:
         stats=results["stats"],
         columns=results.get("columns"),
         rows=results.get("data", []),
+        warnings=results.get("warnings", []),
+        update_type=results.get("updateType"),
+        update_count=results.get("updateCount"),
     )

@@ -30,7 +30,9 @@ class Transport:
         except httpx2.HTTPError as e:
             msg = f"failed to reach the Coordinator at {request.url}: {e}"
             raise TrinoConnectionError(msg) from e
-        return HttpResponse(response.status_code, response.content)
+        return HttpResponse(
+            response.status_code, response.content, tuple(response.headers.multi_items())
+        )
 
     async def aclose(self) -> None:
         """Close the client if this transport created it."""

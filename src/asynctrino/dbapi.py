@@ -8,13 +8,15 @@ Example:
     [[1]]
 """
 
+from collections.abc import Mapping, Sequence
 from types import TracebackType
 from typing import Final, NamedTuple, Self
 
 import httpx2
 
-from asynctrino._core.coordinator import DEFAULT_SOURCE, ClientSession, Coordinator, HttpScheme
-from asynctrino._core.query import Query
+from asynctrino._core.coordinator import Coordinator, HttpScheme
+from asynctrino._core.query import Query, StatsCallback
+from asynctrino._core.session import DEFAULT_SOURCE, ClientSession, SessionState, format_roles
 from asynctrino._core.status import Column, Row
 from asynctrino._http import Transport, fetch_more, submit
 from asynctrino.exceptions import (
@@ -102,12 +104,17 @@ class Connection:
         self, coordinator: Coordinator, session: ClientSession, transport: Transport
     ) -> None:
         self._coordinator = coordinator
-        self._session = session
+        self._session = SessionState(session)
         self._transport = transport
 
-    def cursor(self) -> Cursor:
-        """Return a new cursor. No I/O happens until :meth:`Cursor.execute`."""
-        return Cursor(self, self._coordinator, self._session, self._transport)
+    def cursor(self, *, stats_callback: StatsCallback | None = None) -> Cursor:
+        """Return a new cursor. No I/O happens until :meth:`Cursor.execute`.
+
+        Args:
+            stats_callback: Called with a copy of the query statistics after every Coordinator
+                response, so progress can be reported while a statement runs.
+        """
+        return Cursor(self, self._coordinator, self._session, self._transport, stats_callback)
 
     async def close(self) -> None:
         """Close the connection and the HTTP client, if asynctrino created it."""
@@ -136,13 +143,15 @@ class Cursor:
         self,
         connection: Connection,
         coordinator: Coordinator,
-        session: ClientSession,
+        session: SessionState,
         transport: Transport,
+        stats_callback: StatsCallback | None = None,
     ) -> None:
         self._connection = connection
         self._coordinator = coordinator
         self._session = session
         self._transport = transport
+        self._stats_callback = stats_callback
         self._query: Query | None = None
         self._closed = False
         self.arraysize = 1
@@ -159,6 +168,43 @@ class Cursor:
             return None
         return [ColumnDescription.from_column(column) for column in self._query.columns]
 
+    @property
+    def rowcount(self) -> int:
+        """The number of rows an update statement changed, or -1 when Trino didn't report one."""
+        if self._query is None or self._query.update_count is None:
+            return -1
+        return self._query.update_count
+
+    @property
+    def query_id(self) -> str | None:
+        """The Trino query id of the last executed statement."""
+        return None if self._query is None else self._query.query_id
+
+    @property
+    def query(self) -> str | None:
+        """The SQL text of the last executed statement."""
+        return None if self._query is None else self._query.sql
+
+    @property
+    def stats(self) -> dict[str, object] | None:
+        """The latest query statistics reported by the Coordinator, including ``queryId``."""
+        return None if self._query is None else self._query.stats
+
+    @property
+    def warnings(self) -> list[dict[str, object]] | None:
+        """The warnings Trino raised for the last executed statement."""
+        return None if self._query is None else self._query.warnings
+
+    @property
+    def info_uri(self) -> str | None:
+        """The URL of the last executed statement's page in the Trino web UI."""
+        return None if self._query is None else self._query.info_uri
+
+    @property
+    def update_type(self) -> str | None:
+        """The kind of update statement executed, such as ``"INSERT"``, or ``None`` for queries."""
+        return None if self._query is None else self._query.update_type
+
     async def execute(self, operation: str) -> Self:
         """Run a statement.
 
@@ -166,7 +212,7 @@ class Cursor:
         so :attr:`description` is accurate afterwards.
         """
         self._check_open()
-        self._query = Query(operation, self._coordinator, self._session)
+        self._query = Query(operation, self._coordinator, self._session, self._stats_callback)
         await submit(self._query, self._transport)
         return self
 
@@ -237,6 +283,12 @@ def connect(  # noqa: PLR0913
     source: str = DEFAULT_SOURCE,
     catalog: str | None = None,
     schema: str | None = None,
+    session_properties: Mapping[str, str] | None = None,
+    client_tags: Sequence[str] = (),
+    roles: Mapping[str, str] | str | None = None,
+    extra_credential: Sequence[tuple[str, str]] = (),
+    timezone: str | None = None,
+    http_headers: Mapping[str, str] | None = None,
     http_scheme: HttpScheme | None = None,
     http_client: httpx2.AsyncClient | None = None,
 ) -> Connection:
@@ -250,6 +302,14 @@ def connect(  # noqa: PLR0913
         source: The source name reported to Trino.
         catalog: The default catalog.
         schema: The default schema.
+        session_properties: Trino session properties, as ``SET SESSION`` would set them.
+        client_tags: Tags that identify the queries' origin, for resource group selection.
+        roles: Roles to enable, per catalog (``{"hive": "admin"}``); a plain string is the
+            ``system`` role. ``ALL`` and ``NONE`` are passed through.
+        extra_credential: ``(key, value)`` credentials passed to connectors.
+        timezone: The IANA time zone queries run in, such as ``"Europe/Brussels"``.
+        http_headers: Extra HTTP headers for every Coordinator request. They can't replace
+            the headers asynctrino sends itself, and never go to Segment storage.
         http_scheme: ``"http"`` or ``"https"``. Defaults to ``https`` when the port is 443.
         http_client: An ``httpx2.AsyncClient`` to send requests with. asynctrino never closes
             it or changes its defaults. Without one, a client is created on the first request
@@ -260,6 +320,17 @@ def connect(  # noqa: PLR0913
     """
     return Connection(
         Coordinator.resolve(host, port, http_scheme),
-        ClientSession(user=user, source=source, catalog=catalog, schema=schema),
+        ClientSession(
+            user=user,
+            source=source,
+            catalog=catalog,
+            schema=schema,
+            properties={} if session_properties is None else dict(session_properties),
+            client_tags=tuple(client_tags),
+            roles=format_roles(roles),
+            extra_credential=tuple(extra_credential),
+            timezone=timezone,
+            http_headers={} if http_headers is None else dict(http_headers),
+        ),
         Transport(http_client),
     )

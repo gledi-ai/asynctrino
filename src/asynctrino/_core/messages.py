@@ -1,6 +1,6 @@
 """HTTP messages as plain data, exchanged between the protocol core and the I/O layer."""
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -23,3 +23,4 @@ class HttpResponse:
 
     status_code: int
     content: bytes
+    headers: Sequence[tuple[str, str]] = ()
