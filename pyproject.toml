@@ -34,7 +34,7 @@ dependencies = [
 sqlalchemy = ["sqlalchemy[asyncio]>=2.1,<2.2"]
 
 [project.entry-points."sqlalchemy.dialects"]
-asynctrino = "asynctrino.sqlalchemy.dialect:TrinoDialect"
+asynctrino = "asynctrino.sqlalchemy._dialect:TrinoDialect"
 
 [project.urls]
 Homepage = "https://github.com/gledi-ai/asynctrino"
