@@ -216,6 +216,9 @@ def decode(encoding: Encoding, metadata: SegmentMetadata, data: bytes) -> list[l
 
 
 def _decompress(encoding: Encoding, size: int, data: bytes) -> bytes:
+    if size < 0:
+        msg = f"Segment announces a negative decompressed size: {size} bytes"
+        raise TrinoConnectionError(msg)
     if size > MAX_UNCOMPRESSED_SIZE:
         msg = f"Segment is too large: {size} bytes once decompressed"
         raise TrinoConnectionError(msg)
