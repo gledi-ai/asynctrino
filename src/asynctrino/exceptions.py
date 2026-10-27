@@ -12,6 +12,7 @@ __all__ = [
     "NotSupportedError",
     "OperationalError",
     "ProgrammingError",
+    "TrinoAuthError",
     "TrinoConnectionError",
     "TrinoQueryError",
     "Warning",
@@ -56,6 +57,10 @@ class ProgrammingError(DatabaseError):
 
 class NotSupportedError(DatabaseError):
     """A method or database API not supported by the database (PEP 249)."""
+
+
+class TrinoAuthError(OperationalError):
+    """Authentication failed, or credentials would have been sent without TLS."""
 
 
 class TrinoConnectionError(OperationalError):

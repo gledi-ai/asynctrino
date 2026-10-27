@@ -2,10 +2,11 @@
 
 import json
 from dataclasses import dataclass
+from http import HTTPStatus
 from typing import Any, NotRequired, TypedDict, cast
 
 from asynctrino._core.messages import HttpResponse
-from asynctrino.exceptions import TrinoConnectionError, TrinoQueryError
+from asynctrino.exceptions import TrinoAuthError, TrinoConnectionError, TrinoQueryError
 
 type Row = list[Any]  # pyrefly: ignore[explicit-any]  # row values are dynamic by nature
 
@@ -53,6 +54,8 @@ def parse_status(response: HttpResponse) -> QueryStatus:
     if not 200 <= response.status_code < 300:  # noqa: PLR2004
         body = response.content.decode(errors="replace")
         msg = f"error {response.status_code}: {body}"
+        if response.status_code == HTTPStatus.UNAUTHORIZED:
+            raise TrinoAuthError(msg)
         raise TrinoConnectionError(msg)
     results = cast("_QueryResults", json.loads(response.content))
     if "error" in results:

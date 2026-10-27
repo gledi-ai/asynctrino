@@ -42,6 +42,11 @@ class Coordinator:
         return cls(f"{scheme}://{parts.hostname}:{explicit_port}{path}")
 
     @property
+    def uses_tls(self) -> bool:
+        """Whether requests to the Coordinator are sent over ``https``."""
+        return self.base_url.startswith("https://")
+
+    @property
     def statement_url(self) -> str:
         """The URL statements are POSTed to."""
         return f"{self.base_url}{STATEMENT_PATH}"

@@ -8,6 +8,7 @@ Example:
     [[1]]
 """
 
+import ssl
 from types import TracebackType
 from typing import Final, NamedTuple, Self
 
@@ -27,6 +28,7 @@ from asynctrino.exceptions import (
     NotSupportedError,
     OperationalError,
     ProgrammingError,
+    TrinoAuthError,
     Warning,  # noqa: A004
 )
 
@@ -54,6 +56,14 @@ __all__ = [
 apilevel: Final = "2.0"
 threadsafety: Final = 1
 paramstyle: Final = "qmark"
+
+_INSECURE_AUTH_MESSAGE = (
+    "TLS/SSL is required for authentication. To use HTTPS, specify 'https://' in the host URL "
+    "(which takes precedence over http_scheme), or, if the host URL has no scheme, pass "
+    "http_scheme='https'. If the transport is already encrypted below the application layer "
+    "(e.g. mTLS), pass allow_insecure_auth=True and ensure "
+    "http-server.authentication.allow-insecure-over-http=true is set on the coordinator."
+)
 
 _LENGTH_TYPES = frozenset({"char", "varchar"})
 _PRECISION_TYPES = frozenset(
@@ -238,6 +248,9 @@ def connect(  # noqa: PLR0913
     catalog: str | None = None,
     schema: str | None = None,
     http_scheme: HttpScheme | None = None,
+    auth: httpx2.Auth | None = None,
+    allow_insecure_auth: bool = False,
+    verify: bool | ssl.SSLContext = True,
     http_client: httpx2.AsyncClient | None = None,
 ) -> Connection:
     """Create a connection to a Trino Coordinator without doing any I/O.
@@ -251,15 +264,31 @@ def connect(  # noqa: PLR0913
         catalog: The default catalog.
         schema: The default schema.
         http_scheme: ``"http"`` or ``"https"``. Defaults to ``https`` when the port is 443.
-        http_client: An ``httpx2.AsyncClient`` to send requests with. asynctrino never closes
-            it or changes its defaults. Without one, a client is created on the first request
-            and closed with the connection.
+        auth: How to authenticate Coordinator requests: a scheme from :mod:`asynctrino.auth`
+            or any ``httpx2.Auth``. It is applied per request, never to Segment storage.
+        allow_insecure_auth: Send ``auth`` credentials over plain ``http``. Only for transports
+            already encrypted below HTTP, such as an mTLS mesh.
+        verify: How to verify the Coordinator's TLS certificate: ``True`` trusts the operating
+            system's store, ``False`` skips verification, and an ``ssl.SSLContext`` is used as
+            is, so it can trust a private CA or present a client certificate. Ignored with
+            ``http_client``.
+        http_client: An ``httpx2.AsyncClient`` to send requests with, keeping its own TLS and
+            proxy settings. asynctrino never closes it or changes its defaults. Without one, a
+            client is created on the first request, honours the proxy environment variables
+            (``HTTPS_PROXY``, ``NO_PROXY``, ...), and is closed with the connection.
 
     Returns:
         A new :class:`Connection`.
+
+    Raises:
+        TrinoAuthError: ``auth`` is set for an ``http`` Coordinator without
+            ``allow_insecure_auth``.
     """
+    coordinator = Coordinator.resolve(host, port, http_scheme)
+    if auth is not None and not coordinator.uses_tls and not allow_insecure_auth:
+        raise TrinoAuthError(_INSECURE_AUTH_MESSAGE)
     return Connection(
-        Coordinator.resolve(host, port, http_scheme),
+        coordinator,
         ClientSession(user=user, source=source, catalog=catalog, schema=schema),
-        Transport(http_client),
+        Transport(http_client, auth=auth, verify=verify),
     )

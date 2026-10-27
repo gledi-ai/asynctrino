@@ -2,7 +2,7 @@
 
 from importlib.metadata import version
 
-from asynctrino import dbapi, exceptions
+from asynctrino import auth, dbapi, exceptions
 from asynctrino.dbapi import connect
 from asynctrino.exceptions import (
     DatabaseError,
@@ -14,6 +14,7 @@ from asynctrino.exceptions import (
     NotSupportedError,
     OperationalError,
     ProgrammingError,
+    TrinoAuthError,
     TrinoConnectionError,
     TrinoQueryError,
     Warning,  # noqa: A004
@@ -31,10 +32,12 @@ __all__ = [
     "NotSupportedError",
     "OperationalError",
     "ProgrammingError",
+    "TrinoAuthError",
     "TrinoConnectionError",
     "TrinoQueryError",
     "Warning",
     "__version__",
+    "auth",
     "connect",
     "dbapi",
     "exceptions",
