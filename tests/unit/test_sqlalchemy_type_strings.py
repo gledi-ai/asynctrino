@@ -1,5 +1,3 @@
-"""Trino type strings, as reflection reports them, parsed into SQLAlchemy types."""
-
 import pytest
 from sqlalchemy import Uuid
 from sqlalchemy.sql.sqltypes import (

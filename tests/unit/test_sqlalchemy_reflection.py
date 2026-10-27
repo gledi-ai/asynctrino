@@ -1,5 +1,3 @@
-"""Reflection through the async engine, against a scripted Coordinator."""
-
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 

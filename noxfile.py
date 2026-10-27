@@ -1,6 +1,4 @@
 # pyright: reportMissingImports=false
-"""Nox sessions for linting, formatting, type checking, the test matrix, and built packages."""
-
 import os
 from pathlib import Path
 

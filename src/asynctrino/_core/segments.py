@@ -1,5 +1,3 @@
-"""Spooling protocol Segments: parsed from Coordinator responses and decoded into rows."""
-
 import base64
 import binascii
 import json

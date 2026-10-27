@@ -1,5 +1,3 @@
-"""Trino-specific SQLAlchemy types, and the parser for Trino type strings."""
-
 import json
 import re
 from collections.abc import Callable, Iterator, Sequence

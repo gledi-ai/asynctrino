@@ -1,5 +1,3 @@
-"""The client session: what the client tells the Coordinator about itself with every request."""
-
 import re
 import warnings
 from collections.abc import Mapping

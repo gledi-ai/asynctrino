@@ -1,5 +1,3 @@
-"""Build ``asynctrino://`` connection URLs from :func:`asynctrino.connect`-style options."""
-
 import json
 import re
 from collections.abc import Mapping, Sequence

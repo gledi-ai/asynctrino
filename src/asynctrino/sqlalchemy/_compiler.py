@@ -1,5 +1,3 @@
-"""Compilers that render SQLAlchemy statements, DDL and types as Trino SQL."""
-
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from decimal import Decimal

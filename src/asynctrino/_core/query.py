@@ -1,5 +1,3 @@
-"""The state of one statement's execution, advanced by feeding it Coordinator responses."""
-
 import copy
 from collections import deque
 from collections.abc import Callable

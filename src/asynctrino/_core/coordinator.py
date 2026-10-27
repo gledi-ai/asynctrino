@@ -1,5 +1,3 @@
-"""Where the Coordinator lives."""
-
 from dataclasses import dataclass
 from typing import Literal
 from urllib.parse import urlsplit

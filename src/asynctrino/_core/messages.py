@@ -1,5 +1,3 @@
-"""HTTP messages as plain data, exchanged between the protocol core and the I/O layer."""
-
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from http import HTTPStatus

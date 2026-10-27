@@ -1,5 +1,3 @@
-"""Coordinator responses parsed into typed query status."""
-
 import json
 from dataclasses import dataclass
 from http import HTTPStatus

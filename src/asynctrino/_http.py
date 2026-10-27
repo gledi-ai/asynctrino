@@ -1,5 +1,3 @@
-"""The thin async layer that sends the protocol core's requests through httpx2."""
-
 import asyncio
 import logging
 import random

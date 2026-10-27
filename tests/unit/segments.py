@@ -1,5 +1,3 @@
-"""Spooling-protocol responses, and a fake Segment storage that serves spooled Segments."""
-
 import base64
 import json
 from collections.abc import Callable, Sequence

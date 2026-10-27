@@ -1,5 +1,3 @@
-"""Reflection through the async engine on a real Coordinator."""
-
 import asyncio
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
