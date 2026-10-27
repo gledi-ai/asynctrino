@@ -1,0 +1,54 @@
+# Changelog
+
+All notable changes to asynctrino, generated from its Conventional Commits.
+
+## [Unreleased]
+
+### Features
+
+- **dbapi:** Run SELECT end to end over a sans-IO protocol core
+- **dbapi:** Carry session state and expose query metadata
+- **auth:** Add Basic/JWT auth, insecure-auth guard and TLS verification
+- **errors:** Map failures to the asynctrino hierarchy, retry transient errors, add request_timeout
+- **types:** Map every Trino type to Python values
+- **dbapi:** Bind parameters via EXECUTE IMMEDIATE and add executemany
+- **dbapi:** Cancel abandoned queries and run cursors concurrently
+- **dbapi:** Add isolation levels and transactions with commit and rollback
+- **sqlalchemy:** Add the asynctrino dialect with URL options mapped onto connect
+- **sqlalchemy:** Stream results through server-side cursors
+- **dbapi:** Let a connection change its isolation level between transactions
+- **sqlalchemy:** Get and set isolation levels through the dialect
+- **sqlalchemy:** Replace connections that lost the Coordinator and terminate invalidated ones
+- **sqlalchemy:** Validate trino_* keyword arguments against the asynctrino dialect
+- **sqlalchemy:** Expose the driver connection and declare Trino's dialect capabilities
+- **spooling:** Decode Segments lazily with storage-scoped requests and a segment cursor
+- **spooling:** Send heartbeats to the Coordinator while a Segment downloads
+- **sqlalchemy:** Compile statements, DDL and types to Trino SQL
+- **sqlalchemy:** Extract JSON paths with quoted keys and literal window frames
+- **sqlalchemy:** Render trino_* table arguments as CREATE TABLE WITH properties
+- **sqlalchemy:** Reflect partition columns as an index and cancel the $partitions query
+- **sqlalchemy:** Reflect columns with parsed types and comments
+- **sqlalchemy:** Reflect schema, table and view names, view definitions and table comments
+- **sqlalchemy:** Render table and column comments inline in CREATE TABLE
+
+### Bug Fixes
+
+- **dbapi:** Never interpolate tzinfo names or subclass formatting into SQL
+- **spooling:** Bound Segment decompression and redact pre-signed URIs
+- **spooling:** Reject negative decompressed sizes and redact URL userinfo
+- **spooling:** Avoid implicit bool in URL redaction
+
+### Documentation
+
+- Document installation, usage and the differences from aiotrino and Upstream
+- Link the maintainer guide and licence files absolutely for PyPI
+
+### Miscellaneous
+
+- Initial commit
+- Scaffold uv, hatchling, ruff, pyrefly, nox and CI toolchain
+- **lint:** Allow builtin-shadowing parameter names in local stubs
+- Version untagged commits as the next patch's development release
+- Add changelog, release notes and package install-check targets
+- Publish tagged releases to TestPyPI, PyPI and GitHub Releases
+
