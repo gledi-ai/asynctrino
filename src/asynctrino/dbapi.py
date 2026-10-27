@@ -16,6 +16,7 @@ from typing import Final, NamedTuple, Self
 import httpx2
 
 from asynctrino._core.coordinator import Coordinator, HttpScheme
+from asynctrino._core.parameters import execute_immediate
 from asynctrino._core.query import Query, StatsCallback
 from asynctrino._core.retry import DEFAULT_MAX_ATTEMPTS, RetryPolicy
 from asynctrino._core.session import (
@@ -195,6 +196,7 @@ class Cursor:
         self._stats_callback = stats_callback
         self._legacy_primitive_types = legacy_primitive_types
         self._query: Query | None = None
+        self._earlier_update_count = 0
         self._closed = False
         self.arraysize = 1
 
@@ -212,10 +214,13 @@ class Cursor:
 
     @property
     def rowcount(self) -> int:
-        """The number of rows an update statement changed, or -1 when Trino didn't report one."""
+        """The number of rows an update statement changed, or -1 when Trino didn't report one.
+
+        After :meth:`executemany`, the total over every parameter set.
+        """
         if self._query is None or self._query.update_count is None:
             return -1
-        return self._query.update_count
+        return self._earlier_update_count + self._query.update_count
 
     @property
     def query_id(self) -> str | None:
@@ -247,21 +252,49 @@ class Cursor:
         """The kind of update statement executed, such as ``"INSERT"``, or ``None`` for queries."""
         return None if self._query is None else self._query.update_type
 
-    async def execute(self, operation: str) -> Self:
-        """Run a statement.
+    async def execute(self, operation: str, params: Sequence[object] | None = None) -> Self:
+        """Run a statement, binding ``params`` to its ``?`` placeholders.
 
-        Returns once its first rows are available, its columns are known, or it has finished,
-        so :attr:`description` is accurate afterwards.
+        Parameters are formatted as Trino literals and bound with ``EXECUTE IMMEDIATE``.
+        Returns once the first rows are available, the columns are known, or the statement
+        has finished, so :attr:`description` is accurate afterwards.
+
+        Args:
+            operation: The SQL statement, with a ``?`` for each parameter.
+            params: A list or tuple of values: ``None``, ``bool``, ``int``, ``float``,
+                ``Decimal``, ``str``, ``bytes``, ``date``, ``time``, ``datetime``,
+                ``uuid.UUID``, or a ``list`` (ARRAY), ``tuple`` (ROW) or ``dict`` (MAP) of them.
+                Empty or ``None`` runs ``operation`` as is.
+
+        Raises:
+            ProgrammingError: ``params`` is not a list or tuple.
+            NotSupportedError: A parameter has a type that can't be bound.
         """
-        self._check_open()
-        self._query = Query(
-            operation,
-            self._coordinator,
-            self._session,
-            self._stats_callback,
-            legacy_primitive_types=self._legacy_primitive_types,
-        )
-        await submit(self._query, self._transport)
+        self._earlier_update_count = 0
+        await self._execute(operation, params)
+        return self
+
+    async def executemany(self, operation: str, seq_of_params: Sequence[Sequence[object]]) -> Self:
+        """Run a statement once per parameter set; :attr:`rowcount` is then their total.
+
+        Every set but the last must run an update statement, such as ``INSERT``. With no
+        sets, ``operation`` runs once as is.
+
+        Raises:
+            NotSupportedError: A statement other than the last returned no update type.
+        """
+        self._earlier_update_count = earlier = 0
+        for params in seq_of_params[:-1]:
+            query = await self._execute(operation, params)
+            await self.fetchall()
+            if query.update_type is None:
+                msg = "Query must return update type"
+                raise NotSupportedError(msg)
+            if query.update_count is not None:
+                earlier += query.update_count
+        last = seq_of_params[-1] if len(seq_of_params) > 0 else None
+        await self._execute(operation, last)
+        self._earlier_update_count = earlier
         return self
 
     async def fetchone(self) -> Row | None:
@@ -309,6 +342,24 @@ class Cursor:
         traceback: TracebackType | None,
     ) -> None:
         await self.close()
+
+    async def _execute(self, operation: str, params: Sequence[object] | None) -> Query:
+        self._check_open()
+        if params is not None and not isinstance(params, (list, tuple)):
+            msg = f"params must be a list or tuple of parameter values, not {type(params)}"
+            raise ProgrammingError(msg)
+        if params is not None and len(params) > 0:
+            operation = execute_immediate(operation, params)
+        query = Query(
+            operation,
+            self._coordinator,
+            self._session,
+            self._stats_callback,
+            legacy_primitive_types=self._legacy_primitive_types,
+        )
+        self._query = query
+        await submit(query, self._transport)
+        return query
 
     def _check_open(self) -> None:
         if self._closed:
