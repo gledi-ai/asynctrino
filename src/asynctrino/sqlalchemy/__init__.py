@@ -3,7 +3,18 @@
 Requires the ``asynctrino[sqlalchemy]`` extra.
 """
 
+from asynctrino.sqlalchemy._types import DOUBLE, JSON, MAP, ROW, TIME, TIMESTAMP, VARBINARY
 from asynctrino.sqlalchemy._url import URL
 from asynctrino.sqlalchemy.dialect import TrinoDialect
 
-__all__ = ["URL", "TrinoDialect"]
+__all__ = [
+    "DOUBLE",
+    "JSON",
+    "MAP",
+    "ROW",
+    "TIME",
+    "TIMESTAMP",
+    "URL",
+    "VARBINARY",
+    "TrinoDialect",
+]

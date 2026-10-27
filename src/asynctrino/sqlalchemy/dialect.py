@@ -14,6 +14,7 @@ from sqlalchemy.engine.interfaces import (
 from sqlalchemy.engine.interfaces import IsolationLevel as SQLAlchemyIsolationLevel
 from sqlalchemy.engine.url import URL
 from sqlalchemy.pool import PoolProxiedConnection
+from sqlalchemy.sql import sqltypes
 from sqlalchemy.sql.base import DialectKWArgs
 from sqlalchemy.util import VersionInfo, parse_version_string
 
@@ -22,6 +23,13 @@ from asynctrino.auth import BasicAuthentication, JWTAuthentication
 from asynctrino.dbapi import Connection, IsolationLevel
 from asynctrino.exceptions import TrinoConnectionError
 from asynctrino.sqlalchemy._adapter import AsyncAdaptConnection, AsyncAdaptDBAPI
+from asynctrino.sqlalchemy._compiler import (
+    TrinoDDLCompiler,
+    TrinoIdentifierPreparer,
+    TrinoSQLCompiler,
+    TrinoTypeCompiler,
+)
+from asynctrino.sqlalchemy._types import VARBINARY, FloatAsDouble, JSONIndexType, JSONPathType
 from asynctrino.sqlalchemy._url import DEFAULT_SOURCE
 
 _PLAIN_QUERY_OPTIONS = ("source", "timezone")
@@ -54,10 +62,21 @@ class TrinoDialect(DefaultDialect):
     supports_server_side_cursors = True
     has_terminate = True
     execution_ctx_cls = TrinoExecutionContext
+    statement_compiler = TrinoSQLCompiler
+    ddl_compiler = TrinoDDLCompiler
+    type_compiler_cls = TrinoTypeCompiler
+    preparer = TrinoIdentifierPreparer
+    colspecs = {  # noqa: RUF012
+        sqltypes.Float: FloatAsDouble,
+        sqltypes.JSON.JSONIndexType: JSONIndexType,
+        sqltypes.JSON.JSONPathType: JSONPathType,
+        sqltypes._Binary: VARBINARY,  # noqa: SLF001
+    }
 
     supports_native_enum = False
     supports_native_boolean = True
     supports_native_decimal = True
+    supports_native_uuid = True
     supports_sequences = False
     supports_comments = True
     inline_comments = True
