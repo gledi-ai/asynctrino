@@ -18,7 +18,13 @@ import httpx2
 from asynctrino._core.coordinator import Coordinator, HttpScheme
 from asynctrino._core.query import Query, StatsCallback
 from asynctrino._core.retry import DEFAULT_MAX_ATTEMPTS, RetryPolicy
-from asynctrino._core.session import DEFAULT_SOURCE, ClientSession, SessionState, format_roles
+from asynctrino._core.session import (
+    DEFAULT_SOURCE,
+    ClientSession,
+    SessionState,
+    format_roles,
+    session_timezone,
+)
 from asynctrino._core.status import Column, Row
 from asynctrino._core.transaction import (
     COMMIT,
@@ -27,7 +33,7 @@ from asynctrino._core.transaction import (
     IsolationLevel,
     start_transaction,
 )
-from asynctrino._http import DEFAULT_REQUEST_TIMEOUT, Transport, fetch_more, submit
+from asynctrino._http import DEFAULT_REQUEST_TIMEOUT, QueryRunner, Transport
 from asynctrino.exceptions import (
     DatabaseError,
     DataError,
@@ -120,19 +126,20 @@ class _Executor:
     """Runs a connection's statements, inside its transactions unless it is in autocommit.
 
     A transaction starts with the first statement and ends with :meth:`end`. While it is open,
-    a statement is in flight from its submission until it finishes, fails, or is released.
+    a statement is in flight from its submission until it finishes, fails, is cancelled, or is
+    released.
     """
 
     def __init__(
         self,
         coordinator: Coordinator,
         session: SessionState,
-        transport: Transport,
+        runner: QueryRunner,
         isolation_level: IsolationLevel,
     ) -> None:
         self.coordinator = coordinator
         self.session = session
-        self.transport = transport
+        self.runner = runner
         self.isolation_level = isolation_level
         self._in_flight: Query | None = None
 
@@ -143,9 +150,10 @@ class _Executor:
             ProgrammingError: Another statement is in flight in the transaction.
         """
         if self.isolation_level is IsolationLevel.AUTOCOMMIT:
-            await submit(query, self.transport)
+            await self.runner.submit(query)
             return
-        if self._in_flight is not None and not self._in_flight.finished:
+        in_flight = self._in_flight
+        if in_flight is not None and not (in_flight.finished or in_flight.cancelled):
             msg = (
                 "another statement is still in flight in this transaction; "
                 "fetch all of its rows or close its cursor first"
@@ -155,15 +163,15 @@ class _Executor:
         try:
             if not self.session.current.in_transaction:
                 await self._run(start_transaction(self.isolation_level))
-            await submit(query, self.transport)
+            await self.runner.submit(query)
         except BaseException:
             self.release(query)
             raise
 
     async def fetch_more(self, query: Query) -> bool:
-        """Fetch the next page of ``query``; return ``False`` if it had already finished."""
+        """Fetch the next page of ``query``; return ``False`` if it had already ended."""
         try:
-            return await fetch_more(query, self.transport)
+            return await self.runner.fetch_more(query)
         except BaseException:
             self.release(query)
             raise
@@ -188,9 +196,9 @@ class _Executor:
 
     async def _run(self, sql: str) -> None:
         query = Query(sql, self.coordinator, self.session)
-        await submit(query, self.transport)
-        while not query.finished:
-            await fetch_more(query, self.transport)
+        await self.runner.submit(query)
+        while query.running:
+            await self.runner.fetch_more(query)
 
 
 class Connection:
@@ -206,23 +214,39 @@ class Connection:
         coordinator: Coordinator,
         session: ClientSession,
         transport: Transport,
+        *,
+        legacy_primitive_types: bool,
         isolation_level: IsolationLevel = IsolationLevel.AUTOCOMMIT,
     ) -> None:
-        self._executor = _Executor(coordinator, SessionState(session), transport, isolation_level)
+        self._executor = _Executor(
+            coordinator, SessionState(session), QueryRunner(transport), isolation_level
+        )
+        self._legacy_primitive_types = legacy_primitive_types
 
     @property
     def isolation_level(self) -> IsolationLevel:
         """How this connection runs statements: in autocommit, or in transactions at this level."""
         return self._executor.isolation_level
 
-    def cursor(self, *, stats_callback: StatsCallback | None = None) -> Cursor:
+    def cursor(
+        self,
+        *,
+        stats_callback: StatsCallback | None = None,
+        legacy_primitive_types: bool | None = None,
+    ) -> Cursor:
         """Return a new cursor. No I/O happens until :meth:`Cursor.execute`.
 
         Args:
             stats_callback: Called with a copy of the query statistics after every Coordinator
                 response, so progress can be reported while a statement runs.
+            legacy_primitive_types: Override the connection's ``legacy_primitive_types`` for
+                this cursor.
         """
-        return Cursor(self, self._executor, stats_callback)
+        if legacy_primitive_types is None:
+            legacy_primitive_types = self._legacy_primitive_types
+        return Cursor(
+            self, self._executor, stats_callback, legacy_primitive_types=legacy_primitive_types
+        )
 
     async def commit(self) -> None:
         """Commit the open transaction. Does nothing in autocommit or when none is open."""
@@ -233,8 +257,12 @@ class Connection:
         await self._executor.end(ROLLBACK)
 
     async def close(self) -> None:
-        """Close the connection and the HTTP client, if asynctrino created it."""
-        await self._executor.transport.aclose()
+        """Close the connection and the HTTP client, if asynctrino created it.
+
+        Unfinished queries of its cursors are cancelled first, as :meth:`Cursor.close` does.
+        """
+        await self._executor.runner.abandon_all()
+        await self._executor.runner.transport.aclose()
 
     async def __aenter__(self) -> Self:
         return self
@@ -258,6 +286,11 @@ class Connection:
 class Cursor:
     """Executes statements and fetches their rows. Create it with :meth:`Connection.cursor`.
 
+    Cursors of one autocommit connection can be used from concurrent tasks, one task per cursor.
+    If the task awaiting :meth:`execute` or a fetch is cancelled, for instance by
+    ``asyncio.timeout``, the query is cancelled on the Coordinator best-effort before the
+    ``CancelledError`` propagates.
+
     Attributes:
         arraysize: How many rows :meth:`fetchmany` returns when no size is given.
     """
@@ -267,10 +300,13 @@ class Cursor:
         connection: Connection,
         executor: _Executor,
         stats_callback: StatsCallback | None = None,
+        *,
+        legacy_primitive_types: bool,
     ) -> None:
         self._connection = connection
         self._executor = executor
         self._stats_callback = stats_callback
+        self._legacy_primitive_types = legacy_primitive_types
         self._query: Query | None = None
         self._closed = False
         self.arraysize = 1
@@ -331,9 +367,15 @@ class Cursor:
         so :attr:`description` is accurate afterwards.
         """
         self._check_open()
-        executor = self._executor
-        self._query = Query(operation, executor.coordinator, executor.session, self._stats_callback)
-        await executor.submit(self._query)
+        query = Query(
+            operation,
+            self._executor.coordinator,
+            self._executor.session,
+            self._stats_callback,
+            legacy_primitive_types=self._legacy_primitive_types,
+        )
+        self._query = query
+        await self._executor.submit(query)
         return self
 
     async def fetchone(self) -> Row | None:
@@ -358,10 +400,27 @@ class Cursor:
             rows.extend(query.take_rows())
         return rows
 
+    async def cancel(self) -> None:
+        """Cancel the running statement on the Coordinator; it then returns no more rows.
+
+        Does nothing if no statement is running.
+
+        Raises:
+            TrinoConnectionError: The Coordinator could not be reached or refused to cancel.
+        """
+        if self._query is not None:
+            await self._executor.runner.cancel(self._query)
+
     async def close(self) -> None:
-        """Close the cursor; any further use raises :class:`ProgrammingError`."""
+        """Close the cursor; any further use raises :class:`ProgrammingError`.
+
+        An unfinished query is cancelled on the Coordinator best-effort: a failure to cancel it
+        is logged to the ``asynctrino`` logger, not raised.
+        """
         self._closed = True
-        self._executor.release(self._query)
+        if self._query is not None:
+            self._executor.release(self._query)
+            await self._executor.runner.abandon(self._query)
 
     def __aiter__(self) -> Self:
         return self
@@ -418,6 +477,7 @@ def connect(  # noqa: PLR0913
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     request_timeout: float | httpx2.Timeout = DEFAULT_REQUEST_TIMEOUT,
     http_client: httpx2.AsyncClient | None = None,
+    legacy_primitive_types: bool = False,
 ) -> Connection:
     """Create a connection to a Trino Coordinator without doing any I/O.
 
@@ -434,7 +494,8 @@ def connect(  # noqa: PLR0913
         roles: Roles to enable, per catalog (``{"hive": "admin"}``); a plain string is the
             ``system`` role. ``ALL`` and ``NONE`` are passed through.
         extra_credential: ``(key, value)`` credentials passed to connectors.
-        timezone: The IANA time zone queries run in, such as ``"Europe/Brussels"``.
+        timezone: The IANA time zone queries run in, such as ``"Europe/Brussels"``. Defaults to
+            the local time zone.
         http_headers: Extra HTTP headers for every Coordinator request. They can't replace
             the headers asynctrino sends itself, and never go to Segment storage.
         http_scheme: ``"http"`` or ``"https"``. Defaults to ``https`` when the port is 443.
@@ -461,6 +522,8 @@ def connect(  # noqa: PLR0913
             proxy settings. asynctrino never closes it or changes its defaults. Without one, a
             client is created on the first request, honours the proxy environment variables
             (``HTTPS_PROXY``, ``NO_PROXY``, ...), and is closed with the connection.
+        legacy_primitive_types: Return every value as the Coordinator sent it, without mapping
+            it to a Python type. :meth:`Connection.cursor` can override it per cursor.
 
     Returns:
         A new :class:`Connection`.
@@ -471,7 +534,7 @@ def connect(  # noqa: PLR0913
         ValueError: ``max_attempts`` is less than 1, ``http_scheme`` or ``isolation_level`` is
             unknown, an ``extra_credential`` key is not ASCII or contains whitespace or ``=``,
             or ``http_headers`` would override a header asynctrino sends itself.
-        ZoneInfoNotFoundError: ``timezone`` is not a known IANA time zone.
+        zoneinfo.ZoneInfoNotFoundError: ``timezone`` is not a known IANA time zone.
     """
     coordinator = Coordinator.resolve(host, port, http_scheme)
     if auth is not None and not coordinator.uses_tls and not allow_insecure_auth:
@@ -489,7 +552,7 @@ def connect(  # noqa: PLR0913
             client_tags=tuple(client_tags),
             roles=format_roles(roles),
             extra_credential=tuple(extra_credential),
-            timezone=timezone,
+            timezone=session_timezone(timezone),
             http_headers={} if http_headers is None else dict(http_headers),
             transaction_id=None if autocommit else NO_TRANSACTION,
         ),
@@ -500,5 +563,6 @@ def connect(  # noqa: PLR0913
             retry=RetryPolicy(max_attempts=max_attempts),
             timeout=request_timeout,
         ),
-        isolation_level,
+        legacy_primitive_types=legacy_primitive_types,
+        isolation_level=isolation_level,
     )

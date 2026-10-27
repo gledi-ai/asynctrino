@@ -7,9 +7,12 @@ from dataclasses import dataclass, field, replace
 from urllib.parse import quote, quote_plus, unquote_plus
 from zoneinfo import ZoneInfo
 
+import tzlocal
+
 from asynctrino._core.transaction import NO_TRANSACTION
 
 DEFAULT_SOURCE = "asynctrino"
+CLIENT_CAPABILITIES = "NUMBER,PARAMETRIC_DATETIME,SESSION_AUTHORIZATION"
 
 _LEGACY_ROLE = re.compile(r"^ROLE\{.*\}$")
 _EXTRA_CREDENTIAL_KEY = re.compile(r"[^\s=]+")
@@ -32,6 +35,18 @@ RESERVED_HEADERS = frozenset(
         "x-trino-user",
     }
 )
+
+
+def session_timezone(timezone: str | None) -> str:
+    """The IANA time zone a session runs in: ``timezone`` if given, else the local zone.
+
+    Raises:
+        zoneinfo.ZoneInfoNotFoundError: ``timezone`` is not a known IANA time zone.
+    """
+    if timezone is None:
+        return tzlocal.get_localzone_name()
+    _ = ZoneInfo(timezone)
+    return timezone
 
 
 def format_roles(roles: Mapping[str, str] | str | None) -> dict[str, str]:
@@ -108,6 +123,7 @@ class ClientSession:
                 ", ".join(f"{k}={quote_plus(v)}" for k, v in self.extra_credential)
             ),
             "X-Trino-Time-Zone": self.timezone,
+            "X-Trino-Client-Capabilities": CLIENT_CAPABILITIES,
             "X-Trino-Transaction-Id": self.transaction_id,
         }
         present = {name: value for name, value in values.items() if value is not None}

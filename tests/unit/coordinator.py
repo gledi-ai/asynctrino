@@ -58,7 +58,10 @@ def statement_pages(
 
 @dataclass
 class FakeCoordinator:
-    """Answers the statement POST with the first page and each ``nextUri`` GET with the next."""
+    """Answers the statement POST with the first page and each ``nextUri`` GET with the next.
+
+    Every ``DELETE`` is accepted with 204, as the Coordinator does when cancelling a query.
+    """
 
     pages: list[JSON]
     requests: list[httpx2.Request] = field(default_factory=list[httpx2.Request])
@@ -66,6 +69,8 @@ class FakeCoordinator:
     def handler(self, request: httpx2.Request) -> httpx2.Response:
         """Record ``request`` and answer it with the scripted page."""
         self.requests.append(request)
+        if request.method == "DELETE":
+            return httpx2.Response(204)
         if request.method == "POST" and request.url.path.endswith("/v1/statement"):
             return httpx2.Response(200, json=self.pages[0])
         for index, page in enumerate(self.pages, start=1):

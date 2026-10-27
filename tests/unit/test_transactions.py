@@ -8,7 +8,7 @@ import pytest
 
 from asynctrino.dbapi import Connection, IsolationLevel, ProgrammingError, connect
 from asynctrino.exceptions import TrinoUserError
-from tests.unit.coordinator import BASE_URL, JSON
+from tests.unit.coordinator import BASE_URL, JSON, column
 
 
 @dataclass
@@ -44,7 +44,8 @@ class TransactionCoordinator:
         sql = request.content.decode()
         if sql in self.open_statements:
             next_uri = f"{BASE_URL}/v1/statement/executing/{query_id}/y/1"
-            page |= {"stats": {"state": "RUNNING"}, "columns": [], "data": [[1]]}
+            page |= {"stats": {"state": "RUNNING"}, "columns": [column("_col0", "integer")]}
+            page["data"] = [[1]]
             page["nextUri"] = next_uri
             if sql in self.failing_statements:
                 self._failing_uris.add(next_uri)
@@ -269,7 +270,7 @@ async def test_a_second_statement_in_flight_in_a_transaction_is_refused() -> Non
         assert len(coordinator.requests) == sent
 
 
-@pytest.mark.parametrize("finish", ["fetchall", "close", "commit", "rollback"])
+@pytest.mark.parametrize("finish", ["fetchall", "cancel", "close", "commit", "rollback"])
 async def test_the_next_statement_may_run_once_the_one_in_flight_is_done(finish: str) -> None:
     coordinator = TransactionCoordinator(open_statements={"SELECT 1"})
     async with coordinator.client() as client:

@@ -19,6 +19,7 @@ __all__ = [
     "ProgrammingError",
     "TrinoAuthError",
     "TrinoConnectionError",
+    "TrinoDataError",
     "TrinoExternalError",
     "TrinoInternalError",
     "TrinoQueryError",
@@ -73,6 +74,13 @@ class TrinoAuthError(OperationalError):
 
 class TrinoConnectionError(OperationalError):
     """The Coordinator could not be reached or answered with an unexpected HTTP response."""
+
+
+class TrinoDataError(NotSupportedError):
+    """A value the Coordinator returned has no Python representation, like ``DATE '-0001-01-01'``.
+
+    Pass ``legacy_primitive_types=True`` to receive such values as the Coordinator sent them.
+    """
 
 
 class HttpError(TrinoConnectionError):
