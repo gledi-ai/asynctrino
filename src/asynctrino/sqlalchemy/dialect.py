@@ -14,6 +14,7 @@ from sqlalchemy.engine.interfaces import (
 from sqlalchemy.engine.interfaces import IsolationLevel as SQLAlchemyIsolationLevel
 from sqlalchemy.engine.url import URL
 from sqlalchemy.pool import PoolProxiedConnection
+from sqlalchemy.sql.base import DialectKWArgs
 from sqlalchemy.util import VersionInfo, parse_version_string
 
 import asynctrino
@@ -156,3 +157,15 @@ def _catalog_and_schema(database: str | None) -> dict[str, str]:
         case _:
             msg = f"Unexpected database format {database}"
             raise ValueError(msg)
+
+
+def _validate_trino_keyword_arguments_with(dialect: type[DefaultDialect]) -> None:
+    # SQLAlchemy validates `trino_*` arguments with the dialect registered as "trino", which is
+    # missing or Upstream's since this one is registered as "asynctrino"; use this one instead.
+    arguments = dialect.construct_arguments
+    DialectKWArgs._kw_registry[dialect.name] = (  # noqa: SLF001
+        None if arguments is None else dict(arguments)
+    )
+
+
+_validate_trino_keyword_arguments_with(TrinoDialect)
