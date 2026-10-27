@@ -13,8 +13,13 @@ from sqlalchemy.engine.interfaces import (
     DBAPIConnection,
     DBAPICursor,
     DBAPIModule,
+    ReflectedCheckConstraint,
     ReflectedColumn,
+    ReflectedForeignKeyConstraint,
     ReflectedIndex,
+    ReflectedPrimaryKeyConstraint,
+    ReflectedTableComment,
+    ReflectedUniqueConstraint,
 )
 from sqlalchemy.engine.interfaces import IsolationLevel as SQLAlchemyIsolationLevel
 from sqlalchemy.engine.url import URL
@@ -28,7 +33,7 @@ from sqlalchemy.util import VersionInfo, parse_version_string
 import asynctrino
 from asynctrino.auth import BasicAuthentication, JWTAuthentication
 from asynctrino.dbapi import Connection, IsolationLevel
-from asynctrino.exceptions import TrinoConnectionError
+from asynctrino.exceptions import TrinoConnectionError, TrinoQueryError
 from asynctrino.sqlalchemy._adapter import AsyncAdaptConnection, AsyncAdaptDBAPI
 from asynctrino.sqlalchemy._compiler import (
     TrinoDDLCompiler,
@@ -212,6 +217,159 @@ class TrinoDialect(DefaultDialect):
         """The connection's current schema, which ``USE`` changes."""
         return _driver_connection(connection).schema
 
+    def get_catalog_names(self, connection: SQLAlchemyConnection) -> list[str]:
+        """The names of every catalog the connection can see."""
+        query = text('SELECT "table_cat" FROM "system"."jdbc"."catalogs"')
+        return list(connection.execute(query).scalars())
+
+    @override
+    def get_schema_names(self, connection: SQLAlchemyConnection, **kw: object) -> list[str]:
+        """The names of the schemas in the connection's current catalog."""
+        query = text('SELECT "schema_name" FROM "information_schema"."schemata"')
+        return list(connection.execute(query).scalars())
+
+    @override
+    def has_schema(self, connection: SQLAlchemyConnection, schema_name: str, **kw: object) -> bool:
+        query = text(
+            'SELECT "schema_name" FROM "information_schema"."schemata"'
+            ' WHERE "schema_name" = :schema'
+        )
+        return connection.execute(query, {"schema": schema_name}).first() is not None
+
+    @override
+    def get_table_names(
+        self, connection: SQLAlchemyConnection, schema: str | None = None, **kw: object
+    ) -> list[str]:
+        """The names of the schema's tables, views excluded.
+
+        Raises:
+            NoSuchTableError: No schema is given and the connection has none.
+        """
+        return self._names_of(connection, schema, "BASE TABLE")
+
+    @override
+    def get_view_names(
+        self, connection: SQLAlchemyConnection, schema: str | None = None, **kw: object
+    ) -> list[str]:
+        """The names of the schema's views.
+
+        Raises:
+            NoSuchTableError: No schema is given and the connection has none.
+        """
+        return self._names_of(connection, schema, "VIEW")
+
+    def _names_of(
+        self, connection: SQLAlchemyConnection, schema: str | None, table_type: str
+    ) -> list[str]:
+        # information_schema.views would compile every view definition; tables doesn't.
+        query = text(
+            'SELECT "table_name" FROM "information_schema"."tables"'
+            ' WHERE "table_schema" = :schema AND "table_type" = :table_type'
+        )
+        parameters = {"schema": self._required_schema(connection, schema), "table_type": table_type}
+        return list(connection.execute(query, parameters).scalars())
+
+    @override
+    def get_view_definition(
+        self,
+        connection: SQLAlchemyConnection,
+        view_name: str,
+        schema: str | None = None,
+        **kw: object,
+    ) -> str:
+        """The view's ``SELECT`` statement.
+
+        Raises:
+            NoSuchTableError: The view doesn't exist, or no schema is given and the connection
+                has none.
+        """
+        query = text(
+            'SELECT "view_definition" FROM "information_schema"."views"'
+            ' WHERE "table_schema" = :schema AND "table_name" = :view'
+        )
+        schema = self._required_schema(connection, schema)
+        definition: str | None = connection.execute(
+            query, {"schema": schema, "view": view_name}
+        ).scalar()
+        if definition is None:
+            msg = f"schema={schema}, view={view_name}"
+            raise exc.NoSuchTableError(msg)
+        return definition
+
+    @override
+    def get_pk_constraint(
+        self,
+        connection: SQLAlchemyConnection,
+        table_name: str,
+        schema: str | None = None,
+        **kw: object,
+    ) -> ReflectedPrimaryKeyConstraint:
+        """No columns: Trino has no primary keys."""
+        return {"name": None, "constrained_columns": []}
+
+    @override
+    def get_foreign_keys(
+        self,
+        connection: SQLAlchemyConnection,
+        table_name: str,
+        schema: str | None = None,
+        **kw: object,
+    ) -> list[ReflectedForeignKeyConstraint]:
+        """None: Trino has no foreign keys."""
+        return []
+
+    @override
+    def get_unique_constraints(
+        self,
+        connection: SQLAlchemyConnection,
+        table_name: str,
+        schema: str | None = None,
+        **kw: object,
+    ) -> list[ReflectedUniqueConstraint]:
+        """None: Trino has no unique constraints."""
+        return []
+
+    @override
+    def get_check_constraints(
+        self,
+        connection: SQLAlchemyConnection,
+        table_name: str,
+        schema: str | None = None,
+        **kw: object,
+    ) -> list[ReflectedCheckConstraint]:
+        """None: Trino has no check constraints."""
+        return []
+
+    @override
+    def get_table_comment(
+        self,
+        connection: SQLAlchemyConnection,
+        table_name: str,
+        schema: str | None = None,
+        **kw: object,
+    ) -> ReflectedTableComment:
+        """The table's comment, or none if the user may not read it.
+
+        Raises:
+            NoSuchTableError: No schema is given and the connection has none.
+        """
+        query = text(
+            'SELECT "comment" FROM "system"."metadata"."table_comments"'
+            ' WHERE "catalog_name" = :catalog AND "schema_name" = :schema'
+            ' AND "table_name" = :table'
+        )
+        parameters = {
+            "catalog": _driver_connection(connection).catalog,
+            "schema": self._required_schema(connection, schema),
+            "table": table_name,
+        }
+        try:
+            return {"text": connection.execute(query, parameters).scalar()}
+        except exc.DBAPIError as e:
+            if isinstance(e.orig, TrinoQueryError) and e.orig.error_name == "PERMISSION_DENIED":
+                return {"text": None}
+            raise
+
     @override
     def has_table(
         self,
@@ -287,7 +445,7 @@ class TrinoDialect(DefaultDialect):
 
     def _partition_columns(
         self, connection: SQLAlchemyConnection, table_name: str, schema: str | None
-    ) -> list[str]:
+    ) -> list[str | None]:
         quote = self.identifier_preparer.quote_identifier
         schema = self._required_schema(connection, schema)
         partitions = f"{quote(schema)}.{quote(f'{table_name}$partitions')}"
@@ -300,7 +458,7 @@ class TrinoDialect(DefaultDialect):
             description = result.cursor.description
         finally:
             result.close()
-        names = tuple(str(column[0]) for column in description)
+        names = tuple(column[0] for column in description)
         types = [str(column[1]) for column in description]
         if names == _ICEBERG_PARTITIONS and all(
             type_.startswith(prefix)
@@ -317,7 +475,7 @@ class TrinoDialect(DefaultDialect):
             raise exc.NoSuchTableError(msg)
 
     def _schema(self, connection: SQLAlchemyConnection, schema: str | None) -> str | None:
-        return schema or self._get_default_schema_name(connection)
+        return self._get_default_schema_name(connection) if schema is None else schema
 
     def _required_schema(self, connection: SQLAlchemyConnection, schema: str | None) -> str:
         schema = self._schema(connection, schema)

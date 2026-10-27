@@ -9,7 +9,7 @@ from sqlalchemy.engine.interfaces import ReflectedIndex
 from sqlalchemy.engine.reflection import Inspector
 from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 
-from asynctrino.sqlalchemy import MAP
+from asynctrino.sqlalchemy import MAP, TrinoDialect
 from tests.unit.coordinator import JSON, CatalogCoordinator, column, statement_pages
 
 TABLES = '"information_schema"."tables"'
@@ -127,8 +127,12 @@ async def test_indexes_of_a_missing_table_raise() -> None:
 COLUMNS = '"information_schema"."columns"'
 
 
-async def inspected[T](coordinator: CatalogCoordinator, reflect: Callable[[Inspector], T]) -> T:
-    async with connection_to(coordinator) as conn:
+async def inspected[T](
+    coordinator: CatalogCoordinator,
+    reflect: Callable[[Inspector], T],
+    url: str = "asynctrino://alice@coordinator:8080/hive/web",
+) -> T:
+    async with connection_to(coordinator, url) as conn:
         return await conn.run_sync(lambda sync_conn: reflect(inspect(sync_conn)))
 
 
@@ -151,13 +155,13 @@ async def test_columns_reflect_with_parsed_types_and_comments() -> None:
 
     [id_column, tags_column] = await inspected(coordinator, lambda i: i.get_columns("visits"))
 
-    assert (id_column["name"], id_column["nullable"], id_column["comment"]) == (
+    assert (id_column["name"], id_column["nullable"], id_column.get("comment")) == (
         "id",
         False,
         "the id",
     )
     assert isinstance(id_column["type"], types.BIGINT)
-    assert (tags_column["name"], tags_column["nullable"], tags_column["comment"]) == (
+    assert (tags_column["name"], tags_column["nullable"], tags_column.get("comment")) == (
         "tags",
         True,
         None,
@@ -170,3 +174,154 @@ async def test_columns_of_a_missing_table_raise() -> None:
     with pytest.raises(exc.NoSuchTableError):
         _ = await inspected(CatalogCoordinator(), lambda i: i.get_columns("missing"))
 
+
+def names(query_id: str, *values: str) -> list[JSON]:
+    return result(query_id, [column("name", "varchar")], [[value] for value in values])
+
+
+async def test_schema_table_and_view_names_reflect() -> None:
+    coordinator = CatalogCoordinator(
+        {
+            '"information_schema"."schemata"': names("schemata", "information_schema", "web"),
+            "'BASE TABLE'": names("tables", "visits", "users"),
+            "'VIEW'": names("views", "recent_visits"),
+        }
+    )
+
+    reflected = await inspected(
+        coordinator,
+        lambda i: (i.get_schema_names(), i.get_table_names(), i.get_view_names("web")),
+    )
+
+    assert reflected == (["information_schema", "web"], ["visits", "users"], ["recent_visits"])
+    assert all("'web'" in sql for sql in coordinator.statements()[1:])
+
+
+def table_names(inspector: Inspector) -> object:
+    return inspector.get_table_names()
+
+
+def view_names(inspector: Inspector) -> object:
+    return inspector.get_view_names()
+
+
+def view_definition(inspector: Inspector) -> object:
+    return inspector.get_view_definition("v")
+
+
+def table_comment(inspector: Inspector) -> object:
+    return inspector.get_table_comment("t")
+
+
+@pytest.mark.parametrize(
+    "reflect",
+    [table_names, view_names, view_definition, table_comment],
+    ids=lambda reflect: reflect.__name__,
+)
+async def test_names_in_the_default_schema_need_a_schema_on_the_connection(
+    reflect: Callable[[Inspector], object],
+) -> None:
+    with pytest.raises(exc.NoSuchTableError, match="schema is required"):
+        _ = await inspected(CatalogCoordinator(), reflect, "asynctrino://alice@coordinator/hive")
+
+
+async def test_view_definition_reflects() -> None:
+    definition = "SELECT * FROM visits WHERE day > current_date - INTERVAL '7' DAY"
+    coordinator = CatalogCoordinator({'"information_schema"."views"': names("views", definition)})
+
+    reflected = await inspected(coordinator, lambda i: i.get_view_definition("recent_visits"))
+
+    assert reflected == definition
+
+
+async def test_definition_of_a_missing_view_raises() -> None:
+    with pytest.raises(exc.NoSuchTableError, match="missing"):
+        _ = await inspected(CatalogCoordinator(), lambda i: i.get_view_definition("missing"))
+
+
+async def test_has_table_and_has_schema_tell_whether_they_exist() -> None:
+    coordinator = CatalogCoordinator(
+        {
+            TABLES: table_exists("visits"),
+            "USING 'web'": names("schemata", "web"),
+        }
+    )
+
+    reflected = await inspected(
+        coordinator,
+        lambda i: (
+            i.has_table("visits"),
+            i.has_schema("web"),
+            i.has_schema("missing"),
+        ),
+    )
+
+    assert reflected == (True, True, False)
+
+
+async def test_has_table_is_false_without_a_schema() -> None:
+    coordinator = CatalogCoordinator({TABLES: table_exists("visits")})
+
+    reflected = await inspected(
+        coordinator, lambda i: i.has_table("visits"), "asynctrino://alice@coordinator/hive"
+    )
+
+    assert reflected is False
+    assert coordinator.statements() == []
+
+
+async def test_catalog_names_reflect() -> None:
+    coordinator = CatalogCoordinator({'"system"."jdbc"."catalogs"': names("c", "hive", "system")})
+
+    async with connection_to(coordinator) as conn:
+        dialect = conn.dialect
+        assert isinstance(dialect, TrinoDialect)
+        catalogs = await conn.run_sync(dialect.get_catalog_names)
+
+    assert catalogs == ["hive", "system"]
+
+
+async def test_tables_have_no_primary_key_or_other_constraints() -> None:
+    coordinator = CatalogCoordinator()
+
+    reflected = await inspected(
+        coordinator,
+        lambda i: (
+            i.get_pk_constraint("visits"),
+            i.get_foreign_keys("visits"),
+            i.get_unique_constraints("visits"),
+            i.get_check_constraints("visits"),
+        ),
+    )
+
+    assert reflected == ({"name": None, "constrained_columns": []}, [], [], [])
+    assert coordinator.statements() == []
+
+
+TABLE_COMMENTS = '"system"."metadata"."table_comments"'
+
+
+async def test_table_comment_reflects_from_the_connection_catalog() -> None:
+    coordinator = CatalogCoordinator({TABLE_COMMENTS: names("comments", "page visits")})
+
+    reflected = await inspected(coordinator, lambda i: i.get_table_comment("visits"))
+
+    assert reflected == {"text": "page visits"}
+    [sql] = coordinator.statements()
+    assert "'hive'" in sql
+    assert "'web'" in sql
+
+
+async def test_table_comment_is_none_when_access_is_denied() -> None:
+    coordinator = CatalogCoordinator({TABLE_COMMENTS: failed("comments", "PERMISSION_DENIED")})
+
+    reflected = await inspected(coordinator, lambda i: i.get_table_comment("visits"))
+
+    assert reflected == {"text": None}
+
+
+async def test_table_comment_failures_other_than_denied_access_raise() -> None:
+    coordinator = CatalogCoordinator({TABLE_COMMENTS: failed("comments", "CATALOG_NOT_FOUND")})
+
+    with pytest.raises(exc.DBAPIError, match="CATALOG_NOT_FOUND"):
+        _ = await inspected(coordinator, lambda i: i.get_table_comment("visits"))
