@@ -1,6 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
+  "extends": ["config:recommended", ":semanticCommits", "helpers:pinGitHubActionDigests"],
   "schedule": ["* 0-5 * * 1"],
   "minimumReleaseAge": "7 days",
   "lockFileMaintenance": { "enabled": true, "schedule": ["* 0-5 * * 1"] },
