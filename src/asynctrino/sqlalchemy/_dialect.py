@@ -93,14 +93,14 @@ class TrinoDialect(DefaultDialect):
     ddl_compiler = TrinoDDLCompiler
     type_compiler_cls = TrinoTypeCompiler
     preparer = TrinoIdentifierPreparer
-    colspecs = {  # noqa: RUF012
+    colspecs = {  # noqa: RUF012  # SQLAlchemy reads it from the class
         sqltypes.Float: FloatAsDouble,
         sqltypes.JSON.JSONIndexType: JSONIndexType,
         sqltypes.JSON.JSONPathType: JSONPathType,
-        sqltypes._Binary: VARBINARY,  # noqa: SLF001
+        sqltypes._Binary: VARBINARY,  # noqa: SLF001  # the base of every binary type
     }
 
-    construct_arguments = [  # noqa: RUF012
+    construct_arguments = [  # noqa: RUF012  # SQLAlchemy reads it from the class
         (Table, _TABLE_ARGUMENTS),
         (CreateTableAs, _CREATE_TABLE_AS_ARGUMENTS),
     ]
@@ -211,7 +211,7 @@ class TrinoDialect(DefaultDialect):
         return [], kwargs
 
     @override
-    def _get_default_schema_name(  # pyrefly: ignore[bad-override]
+    def _get_default_schema_name(  # pyrefly: ignore[bad-override]  # None before any USE
         self, connection: SQLAlchemyConnection
     ) -> str | None:
         """The connection's current schema, which ``USE`` changes."""
@@ -451,7 +451,7 @@ class TrinoDialect(DefaultDialect):
         partitions = f"{quote(schema)}.{quote(f'{table_name}$partitions')}"
         # Only the columns are read, so the query is cancelled rather than drained.
         result = connection.execute(
-            text(f"SELECT * FROM {partitions}"),  # noqa: S608
+            text(f"SELECT * FROM {partitions}"),  # noqa: S608  # identifiers are quoted
             execution_options={"stream_results": True},
         )
         try:

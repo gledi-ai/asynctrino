@@ -89,7 +89,7 @@ class AsyncAdaptDBAPI(AsyncAdapt_dbapi_module):
         for name in _EXCEPTIONS:
             setattr(self, name, getattr(dbapi, name))
 
-    def connect(self, **kwargs: Any) -> AsyncAdaptConnection:  # noqa: ANN401  # pyrefly: ignore[explicit-any]
+    def connect(self, **kwargs: Any) -> AsyncAdaptConnection:  # noqa: ANN401  # pyrefly: ignore[explicit-any]  # SQLAlchemy's signature
         """Create an asynctrino connection; ``async_creator_fn`` replaces :func:`connect`."""
         creator: Creator = kwargs.pop("async_creator_fn", _connect)
         return await_(AsyncAdaptConnection.create(self, creator(**kwargs)))
@@ -98,6 +98,6 @@ class AsyncAdaptDBAPI(AsyncAdapt_dbapi_module):
 type Creator = Callable[..., Awaitable[AsyncIODBAPIConnection]]
 
 
-async def _connect(**kwargs: Any) -> AsyncIODBAPIConnection:  # noqa: ANN401  # pyrefly: ignore[explicit-any]
+async def _connect(**kwargs: Any) -> AsyncIODBAPIConnection:  # noqa: ANN401  # pyrefly: ignore[explicit-any]  # connect()'s mixed kwargs
     connection: Connection = dbapi.connect(**kwargs)
     return cast("AsyncIODBAPIConnection", connection)

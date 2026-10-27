@@ -21,7 +21,7 @@ from sqlalchemy.types import DOUBLE
 
 from asynctrino._core.parameters import format_parameter
 
-type SQLType = TypeEngine[Any]  # pyrefly: ignore[explicit-any]
+type SQLType = TypeEngine[Any]  # pyrefly: ignore[explicit-any]  # any Python value type
 """Any SQLAlchemy type instance."""
 
 type SQLTypeArgument = SQLType | type[SQLType]
@@ -284,7 +284,7 @@ def unquote(string: str) -> str:
 
     Trino escapes a quote in a quoted name as ``""``; ``\"`` is also accepted.
     """
-    if len(string) < 2 or not (string.startswith('"') and string.endswith('"')):  # noqa: PLR2004
+    if len(string) < 2 or not (string.startswith('"') and string.endswith('"')):  # noqa: PLR2004  # two quotes
         return string
     return string[1:-1].replace('\\"', '"').replace('""', '"')
 

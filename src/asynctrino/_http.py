@@ -69,7 +69,7 @@ class Transport:
                 request,
                 attempt,
                 now=datetime.now(UTC),
-                jitter=random.random(),  # noqa: S311
+                jitter=random.random(),  # noqa: S311  # not used for security
             )
             if delay is None:
                 break

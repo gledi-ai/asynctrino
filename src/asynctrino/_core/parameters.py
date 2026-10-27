@@ -36,7 +36,7 @@ def _format_null(_: None) -> str:
 
 
 @format_parameter.register
-def _format_boolean(value: bool) -> str:  # noqa: FBT001
+def _format_boolean(value: bool) -> str:  # noqa: FBT001  # singledispatch on the value
     return "true" if value else "false"
 
 

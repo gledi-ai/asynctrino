@@ -62,7 +62,7 @@ from asynctrino.exceptions import (
     OperationalError,
     ProgrammingError,
     TrinoAuthError,
-    Warning,  # noqa: A004
+    Warning,  # noqa: A004  # PEP 249 names it
 )
 
 __all__ = [

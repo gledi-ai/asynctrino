@@ -10,7 +10,7 @@ from sqlalchemy import exc
 DEFAULT_SOURCE = "asynctrino-sqlalchemy"
 
 
-def URL(  # noqa: N802, PLR0913
+def URL(  # noqa: N802, PLR0913  # named after the sqlalchemy.URL it builds
     host: str,
     *,
     port: int | None = 8080,

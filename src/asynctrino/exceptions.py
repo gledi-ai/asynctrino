@@ -28,7 +28,7 @@ __all__ = [
 ]
 
 
-class Warning(Exception):  # noqa: A001, N818
+class Warning(Exception):  # noqa: A001, N818  # PEP 249 names it
     """Important warnings, such as data truncation (PEP 249)."""
 
 

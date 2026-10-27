@@ -116,8 +116,8 @@ class IgnoreNullsFunction[T](ReturnTypeFromArgs[T]):
 
     _register = False
     inherit_cache = True
-    _traverse_internals: _TraverseInternalsType = [  # noqa: RUF012
-        *ReturnTypeFromArgs._traverse_internals,  # noqa: SLF001
+    _traverse_internals: _TraverseInternalsType = [  # noqa: RUF012  # SQLAlchemy's cache key
+        *ReturnTypeFromArgs._traverse_internals,  # noqa: SLF001  # extended as SQLAlchemy does
         ("ignore_nulls", InternalTraversal.dp_boolean),
     ]
 
@@ -169,7 +169,7 @@ class TrinoSQLCompiler(compiler.SQLCompiler):
     def limit_clause(self, select: GenerativeSelect, **kw: object) -> str:
         """Trino accepts ``OFFSET`` only before ``LIMIT``."""
         text = ""
-        if select._offset_clause is not None:  # noqa: SLF001
+        if select._offset_clause is not None:  # noqa: SLF001  # as SQLAlchemy's own compilers
             text += "\nOFFSET " + self.process(select._offset_clause, **kw)  # noqa: SLF001
         if select._limit_clause is not None:  # noqa: SLF001
             text += "\nLIMIT " + self.process(select._limit_clause, **kw)  # noqa: SLF001
@@ -208,9 +208,9 @@ class TrinoSQLCompiler(compiler.SQLCompiler):
     @override
     def visit_function(
         self,
-        func: Function[Any],  # pyrefly: ignore[explicit-any]
+        func: Function[Any],  # pyrefly: ignore[explicit-any]  # SQLAlchemy's signature
         add_to_result_map: _ResultMapAppender | None = None,
-        **kwargs: Any,  # pyrefly: ignore[explicit-any]
+        **kwargs: Any,  # pyrefly: ignore[explicit-any]  # SQLAlchemy's signature
     ) -> str:
         sql = super().visit_function(func, add_to_result_map, **kwargs)
         if isinstance(func, IgnoreNullsFunction) and func.ignore_nulls:
@@ -298,19 +298,19 @@ class TrinoDDLCompiler(compiler.DDLCompiler):
         return ", ".join(properties)
 
     @override
-    def visit_primary_key_constraint(  # pyrefly: ignore[bad-override]
+    def visit_primary_key_constraint(  # pyrefly: ignore[bad-override]  # None drops it
         self, constraint: PrimaryKeyConstraint, **kw: object
     ) -> str | None:
         return _ignored_constraint("PRIMARY KEY")
 
     @override
-    def visit_foreign_key_constraint(  # pyrefly: ignore[bad-override]
+    def visit_foreign_key_constraint(  # pyrefly: ignore[bad-override]  # None drops it
         self, constraint: ForeignKeyConstraint, **kw: object
     ) -> str | None:
         return _ignored_constraint("FOREIGN KEY")
 
     @override
-    def visit_unique_constraint(  # pyrefly: ignore[bad-override]
+    def visit_unique_constraint(  # pyrefly: ignore[bad-override]  # None drops it
         self, constraint: UniqueConstraint, **kw: object
     ) -> str | None:
         return _ignored_constraint("UNIQUE")

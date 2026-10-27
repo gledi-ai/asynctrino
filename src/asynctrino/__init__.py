@@ -25,7 +25,7 @@ from asynctrino.exceptions import (
     TrinoInternalError,
     TrinoQueryError,
     TrinoUserError,
-    Warning,  # noqa: A004
+    Warning,  # noqa: A004  # PEP 249 names it
 )
 
 __version__: str = version("asynctrino")
